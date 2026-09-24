@@ -1186,6 +1186,12 @@ async def destroy_session(
         )
 
 
+# مقدار برگشتیِ require_auth وقتی درخواست با «توکن نود» (Bearer) احراز شده، نه نشست ادمین.
+# get_session_info() برای این مقدار None می‌ده، پس endpointهای حساس (رمز، ادمین‌ها،
+# نشست‌ها) که خودشون نشست واقعی می‌خوان با توکن نود هرگز کار نمی‌کنن.
+NODE_API_TOKEN_MARK = "__vodiwalker_node_api__"
+
+
 async def require_auth(
     request: Request,
 ):
@@ -1195,6 +1201,13 @@ async def require_auth(
 
     info = await get_session_info(token)
     if not info:
+        if request.headers.get("authorization"):
+            try:
+                from nodes import authorize_node_request
+            except Exception:
+                authorize_node_request = None
+            if authorize_node_request and authorize_node_request(request):
+                return NODE_API_TOKEN_MARK
         raise HTTPException(status_code=401, detail="unauthorized")
     if info.get("admin_id") != "owner":
         path = request.url.path
@@ -6805,6 +6818,23 @@ except Exception as exc:
 
     logger.warning(
         "Outbound proxy module unavailable: %s",
+        exc,
+    )
+
+
+# نودها: توکن API این پنل + اتصال به پنل‌های دیگر (nodes.py)
+try:
+
+    from nodes import router as nodes_router
+
+    app.include_router(nodes_router)
+
+    logger.info("Nodes module loaded.")
+
+except Exception as exc:
+
+    logger.warning(
+        "Nodes module unavailable: %s",
         exc,
     )
 
