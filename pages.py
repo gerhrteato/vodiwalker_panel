@@ -872,6 +872,7 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(124,92,255,.10),tra
           <select class="sel" id="linkFilterCat" onchange="renderLinks()"><option value="">همه دسته‌ها</option></select>
           <span id="ibUpdatedAt" style="font-size:9px;color:var(--sub2);align-self:center;white-space:nowrap">—</span>
           <button class="btn" id="ibRefreshBtn" onclick="refreshAllInbounds()"><i class="ti ti-refresh" id="ibRefreshIcon"></i>بروزرسانی همه</button>
+          <button class="btn" onclick="openOutboundManager()" title="مدیریت پراکسی‌های SOCKS5 (خروجی)"><i class="ti ti-route"></i>اوتباند</button>
           <button class="btn" onclick="openAutoLink()"><i class="ti ti-bolt"></i>ساخت سریع</button>
           <button class="btn primary btn-inbound" onclick="openLinkDrawer()"><i class="ti ti-plus"></i>اینباند جدید</button>
         </div>
@@ -884,6 +885,7 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(124,92,255,.10),tra
       <div class="ib-bulkbar" id="ibBulkBar" style="display:none">
         <span><b id="ibSelCount">0</b> مورد انتخاب شده</span>
         <div class="ib-bulkactions">
+          <button class="btn sm" onclick="bulkOutbound()"><i class="ti ti-route"></i>خروجی (Outbound)</button>
           <button class="btn sm" onclick="bulkToggleLinks(true)"><i class="ti ti-power"></i>فعال‌سازی</button>
           <button class="btn sm" onclick="bulkToggleLinks(false)"><i class="ti ti-power"></i>غیرفعال‌سازی</button>
           <button class="btn sm" style="color:var(--bad)" onclick="bulkDeleteLinks()"><i class="ti ti-trash"></i>حذف</button>
@@ -1680,7 +1682,7 @@ function ibCardHtml(l){
         <span class="ib-status-dot ${l.status_color||'gray'}" title="${l.status_color==='green'?'در حال اتصال':(l.status_color==='red'?'غیرفعال/منقضی':'فعال - بدون اتصال')}"></span>
       </div>
     </div>
-    <div class="ib-tagrow"><span>${protoLabel(l)}</span><span>${l.network||'tcp'}/${l.security||'none'}</span>${isLive?'<span class="ib-live-tag"><i></i>LIVE</span>':'<span class="ib-linkonly-tag">LINK-ONLY</span>'}<span>${escapeHtml(l.category_name||'بدون دسته')}</span>${l.outbound?`<span class="ib-ob-tag" title="خروجی از طریق پراکسی «${escapeHtml(l.outbound.name||'')}»">${flagHtml(l.outbound)} ${escapeHtml(l.outbound.country||l.outbound.name||'')}</span>`:(l.outbound_proxy_id?'<span class="ib-ob-tag" title="پراکسی حذف شده">⚠️ پراکسی نامعتبر</span>':'')}</div>
+    <div class="ib-tagrow"><span>${protoLabel(l)}</span><span>${l.network||'tcp'}/${l.security||'none'}</span>${isLive?'<span class="ib-live-tag"><i></i>LIVE</span>':'<span class="ib-linkonly-tag">LINK-ONLY</span>'}<span>${escapeHtml(l.category_name||'بدون دسته')}</span>${l.outbound?`<span class="ib-ob-tag" title="خروجی از طریق پراکسی «${escapeHtml(l.outbound.name||'')}»">${flagHtml(l.outbound)} ${escapeHtml(l.outbound.country||l.outbound.name||'')}</span>`:(l.outbound_proxy_id?'<span class="ib-ob-tag" title="پراکسی حذف شده">⚠️ پراکسی نامعتبر</span>':'<span class="ib-ob-tag" title="خروجی مستقیم از Railway">🚀 مستقیم</span>')}</div>
     <div class="ib-card-addr"><span class="mono">${escapeHtml(l.address||'0.0.0.0')}:${port}</span><small>${expSub}</small></div>
     <div class="ib-card-traffic">
       <div class="ib-tf-top"><span>مصرف</span><b>${fmtBytes(l.used_bytes||0)}${l.limit_bytes>0?' / '+fmtBytes(l.limit_bytes):' / ∞'}</b></div>
@@ -1694,6 +1696,7 @@ function ibCardHtml(l){
     <div class="ib-card-foot">
       <div class="ib-clientcell"><button class="iconbtn" title="مدیریت کلاینت‌ها" onclick="openClients('${l.uuid}')"><i class="ti ti-users"></i></button><span>مدیریت کلاینت</span></div>
       <div class="ib-card-actions">
+        <button class="iconbtn" title="خروجی (Outbound)" onclick="changeOutbound(['${l.uuid}'])"><i class="ti ti-route"></i></button>
         <button class="iconbtn" title="اشتراک" onclick="showSubLink('${l.uuid}')"><i class="ti ti-qrcode"></i></button>
         <button class="iconbtn" title="ویرایش" onclick="openLinkDrawer('${l.uuid}')"><i class="ti ti-pencil"></i></button>
         <button class="iconbtn" title="تعویض لینک (UUID جدید)" onclick="regenerateLink('${l.uuid}')"><i class="ti ti-replace"></i></button>
@@ -1946,16 +1949,16 @@ async function regenerateLink(uid){
   catch(e){ toast(e.message, false); }
 }
 async function openAutoLink(){
-  // ساخت سریع = یک اشتراک واحد که داخلش «یک WS + یک XHTTP» هست. قبل از ساخت می‌پرسه
-  // خروجی از خود Railway (مستقیم) باشه یا از یکی از پراکسی‌های SOCKS.
-  const choice = await askOutboundChoice({
-    title: 'ساخت سریع — یک اشتراک با WS + XHTTP',
-    sub: 'ترافیک این اشتراک از کجا خارج شود؟',
-    current: localStorage.getItem('vw_quick_outbound_proxy') || ''
+  // ساخت سریع = یک اشتراک واحد؛ برای هر خروجی انتخاب‌شده «یک WS + یک XHTTP» داخلش می‌ره.
+  const q = localStorage.getItem('vw_quick_outbound_proxy') || '';
+  const exits = await askOutboundChoice({
+    title: 'ساخت سریع — WS + XHTTP در یک اشتراک',
+    sub: 'خروجی را انتخاب کن؛ می‌توانی چند خروجی هم‌زمان بزنی (برای هرکدام یک WS + یک XHTTP).',
+    multi: true, current: [q]
   });
-  if(choice === null) return;
+  if(exits === null) return;
   try{
-    const r = await api('/api/links/auto', {method:'POST', body: JSON.stringify({combo:true, port:443, profile:'balanced', outbound_proxy_id: choice})});
+    const r = await api('/api/links/auto', {method:'POST', body: JSON.stringify({combo:true, port:443, profile:'balanced', outbound_proxy_ids: exits})});
     loadLinks();
     showComboResult(r);
   }
@@ -1964,16 +1967,23 @@ async function openAutoLink(){
 function showComboResult(r){
   const subUrl = r.sub_url || '';
   const qr = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(subUrl);
-  const ob = r.outbound
-    ? `<div class="ob-note ok">${flagHtml(r.outbound)} خروجی از <b>${escapeHtml(r.outbound.country || r.outbound.name || '')}</b> (پراکسی «${escapeHtml(r.outbound.name||'')}»)</div>`
-    : `<div class="ob-note">🚀 خروجی مستقیم از Railway</div>`;
-  const items = (r.items||[]).map(i=>`<div class="ob-item"><b>${escapeHtml(i.label||'')}</b><small>${escapeHtml(protoLabel(i))} · پورت ${i.port||443}</small></div>`).join('');
+  const byUid = Object.fromEntries((r.items||[]).map(i=>[i.uuid, i]));
+  const exits = (r.exits && r.exits.length) ? r.exits : [{outbound: r.outbound}];
+  const blocks = exits.map(e=>{
+    const ob = e.outbound;
+    const head = ob
+      ? `${flagHtml(ob)} <b>${escapeHtml(ob.country||ob.name||'')}</b> <small>پراکسی «${escapeHtml(ob.name||'')}»</small>`
+      : `<span class="ob-emoji">🚀</span> <b>مستقیم</b> <small>خود Railway</small>`;
+    const rows = [['ws','VLESS · WebSocket'],['xhttp','VLESS · XHTTP']].map(([k,lbl])=>{
+      const i = byUid[e[k]]; return i ? `<div class="ob-item"><b>${escapeHtml(i.label||'')}</b><small>${lbl} · پورت ${i.port||443}</small></div>` : '';
+    }).join('');
+    return `<div class="ob-note ${ob?'ok':''}">${head}</div><div class="ob-items">${rows}</div>`;
+  }).join('');
   openDrawer('اشتراک ساخته شد ✓', `
     <div class="qr-box"><img src="${qr}"></div>
-    ${ob}
-    <div class="grp"><label>لینک اشتراک (یک WS + یک XHTTP)</label><div class="copy-row"><input readonly value="${escapeHtml(subUrl)}" id="comboSubInp"></div></div>
+    <div class="grp"><label>لینک اشتراک (${(r.items||[]).length} کانفیگ)</label><div class="copy-row"><input readonly value="${escapeHtml(subUrl)}" id="comboSubInp"></div></div>
     <div class="grp"><label>صفحه‌ی نمایش اشتراک (برای مشتری)</label><div class="copy-row"><input readonly value="${escapeHtml(r.public_url||'')}" id="comboPubInp"></div></div>
-    <div class="ob-items">${items}</div>
+    ${blocks}
     <p class="hint">همین اشتراک در تب «گروه‌های ساب» هم دیده می‌شود.</p>
   `, `<button class="btn primary" style="width:100%" onclick="copyInput('comboSubInp')"><i class="ti ti-copy"></i>کپی لینک اشتراک</button>`);
 }
@@ -1984,7 +1994,7 @@ let PROXIES_ERR = '';
 async function loadProxies(){
   try{ const r = await api('/api/proxies'); PROXIES_CACHE = r.proxies||[]; PROXIES_ERR = ''; }
   catch(e){ PROXIES_ERR = e.message || 'خطا در دریافت لیست'; }
-  renderProxiesSettings(); renderOutboundProxySelects();
+  renderProxiesSettings(); renderOutboundProxySelects(); refreshOutboundPickers();
 }
 function ensureObStyle(){
   if(document.getElementById('obStyle')) return;
@@ -2023,6 +2033,13 @@ function ensureObStyle(){
   .ob-note.ok{border-color:rgba(34,197,139,.35)}
   .ob-items{display:flex;flex-direction:column;gap:6px;margin:8px 0}
   .ob-item{padding:9px 12px;border:1px solid var(--line);border-radius:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px}
+  .ob-box.wide{width:min(640px,100%)}
+  .ob-mgr-body{overflow:auto;padding:0 18px 4px}
+  .ob-hint{margin:8px 16px 0;padding:9px 12px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-size:11.5px;color:var(--sub);display:flex;gap:6px;align-items:flex-start}
+  .ob-picker{display:flex;flex-direction:column;gap:8px;margin:8px 0}
+  .ob-seg{display:flex;gap:6px;padding:4px;border:1px solid var(--line);border-radius:13px;background:var(--panel2);margin-bottom:14px}
+  .ob-seg button{flex:1;padding:9px 10px;border:0;border-radius:10px;background:transparent;color:var(--sub);font-size:12.5px;font-weight:700;cursor:pointer;display:flex;gap:6px;align-items:center;justify-content:center;font-family:inherit}
+  .ob-seg button.on{background:var(--accent);color:#fff}
   `;
   document.head.appendChild(st);
 }
@@ -2057,12 +2074,14 @@ function renderOutboundProxySelects(){
   });
 }
 function renderProxiesSettings(){
-  const wrap = document.getElementById('proxiesListWrap');
-  if(!wrap) return;
-  if(PROXIES_ERR && !PROXIES_CACHE.length){ wrap.innerHTML = `<div class="notice danger-note">لیست پراکسی‌ها از سرور گرفته نشد: ${escapeHtml(PROXIES_ERR)} — مطمئن شو outbound_proxy.py و python-socks روی سرور نصب/دیپلوی شده‌اند.</div>`; return; }
-  if(!PROXIES_CACHE.length){ wrap.innerHTML = '<div class="muted" style="padding:12px">هنوز پراکسی‌ای اضافه نشده. با فرم بالا یک SOCKS5 اضافه کن.</div>'; return; }
+  const html = proxiesListHtml();
+  ['proxiesListWrap','dProxiesListWrap'].forEach(id=>{ const w=document.getElementById(id); if(w) w.innerHTML = html; });
+}
+function proxiesListHtml(){
+  if(PROXIES_ERR && !PROXIES_CACHE.length){ return `<div class="notice danger-note">لیست پراکسی‌ها از سرور گرفته نشد: ${escapeHtml(PROXIES_ERR)} — مطمئن شو outbound_proxy.py و python-socks روی سرور نصب/دیپلوی شده‌اند.</div>`; }
+  if(!PROXIES_CACHE.length){ return '<div class="muted" style="padding:12px">هنوز پراکسی‌ای اضافه نشده. با فرم بالا یک SOCKS5 اضافه کن.</div>'; }
   const quick = localStorage.getItem('vw_quick_outbound_proxy') || '';
-  wrap.innerHTML = PROXIES_CACHE.map(p=>`
+  return PROXIES_CACHE.map(p=>`
     <div class="ob-prow">
       <div class="ob-pflag">${flagHtml(p)}</div>
       <div class="ob-pmain">
@@ -2105,56 +2124,199 @@ function setQuickProxy(id){
   renderProxiesSettings();
   toast('این پراکسی در پنجره‌ی «ساخت سریع» از قبل انتخاب می‌شود ✓');
 }
-async function addProxyForm(){
-  const name = document.getElementById('pxName')?.value.trim();
-  const host = document.getElementById('pxHost')?.value.trim();
-  const port = Number(document.getElementById('pxPort')?.value||1080);
-  const username = document.getElementById('pxUser')?.value.trim();
-  const password = document.getElementById('pxPass')?.value.trim();
+async function addProxyForm(prefix){
+  prefix = prefix || 'px';
+  const el = k => document.getElementById(prefix + k);
+  const name = el('Name')?.value.trim();
+  const host = el('Host')?.value.trim();
+  const port = Number(el('Port')?.value || 1080);
+  const username = el('User')?.value.trim();
+  const password = el('Pass')?.value.trim();
   if(!host){ toast('آدرس پراکسی را وارد کنید', false); return; }
   try{
     const r = await api('/api/proxies', {method:'POST', body: JSON.stringify({name,host,port,username,password})});
-    document.getElementById('pxName').value=''; document.getElementById('pxHost').value=''; document.getElementById('pxPort').value='1080'; document.getElementById('pxUser').value=''; document.getElementById('pxPass').value='';
+    ['Name','Host','User','Pass'].forEach(k=>{ if(el(k)) el(k).value=''; }); if(el('Port')) el('Port').value='1080';
     await loadProxies();
     toast('پراکسی اضافه شد — در حال تست...');
     if(r.proxy?.id) testProxyRow(r.proxy.id);
   }catch(e){ toast(e.message, false); }
 }
 
-// پنجره‌ی انتخاب مسیر خروجی: «مستقیم (خود Railway)» یا یکی از پراکسی‌ها.
-// Promise برمی‌گردونه: '' = مستقیم، id = پراکسی، null = انصراف.
-// اگه هیچ پراکسی‌ای تعریف نشده باشه بدون پرسیدن '' برمی‌گردونه.
+// پنجره‌ی انتخاب مسیر خروجی (Promise):
+//   multi=false → '' (مستقیم) | id ;  multi=true → آرایه‌ای از '' / idها ;  انصراف → null
+//   requireProxies=true → اگه هیچ پراکسی‌ای نیست، به‌جای پرسیدن مدیریت اوتباند رو باز می‌کنه.
 async function askOutboundChoice(opts){
   opts = opts || {};
-  try{ await loadProxies(); }catch(e){}
-  if(!PROXIES_CACHE.length) return '';
+  await loadProxies();
+  if(!PROXIES_CACHE.length){
+    if(opts.requireProxies){ toast('هنوز پراکسی‌ای اضافه نشده؛ اول یک SOCKS5 اضافه کن', false); openOutboundManager(); return null; }
+    return opts.multi ? [''] : '';
+  }
   ensureObStyle();
-  const cur = opts.current || '';
-  const items = [{id:'', direct:true}, ...PROXIES_CACHE];
-  const has = items.some(x=>x.id===cur);
-  const sel = has ? cur : '';
+  const cur = (Array.isArray(opts.current) ? opts.current : [opts.current || '']).filter(id=>id==='' || PROXIES_CACHE.some(p=>p.id===id));
   return new Promise(resolve=>{
     const ov = document.createElement('div'); ov.className = 'ob-ov';
-    const rows = items.map(x=>{
-      const on = x.id===sel;
-      if(x.direct) return `<label class="ob-row ${on?'on':''}"><input type="radio" name="obChoice" value="" ${on?'checked':''}><span class="ob-emoji">🚀</span><span class="ob-txt"><b>مستقیم (خود Railway)</b><small>ترافیک از IP سرور Railway خارج می‌شود</small></span></label>`;
-      const badge = `<span class="ob-badge ${pingClass(x)}">${pingText(x)}</span>`;
-      const detail = `${x.country?escapeHtml(x.country):'کشور نامشخص'}${x.id===cur?' · انتخاب فعلی':''}`;
-      return `<label class="ob-row ${on?'on':''}"><input type="radio" name="obChoice" value="${escapeHtml(x.id)}" ${on?'checked':''}>${flagHtml(x)}<span class="ob-txt"><b>${escapeHtml(x.name)}</b><small>${detail}</small></span>${badge}</label>`;
-    }).join('');
-    ov.innerHTML = `<div class="ob-box" role="dialog"><h3>${escapeHtml(opts.title||'مسیر خروجی')}</h3><p>${escapeHtml(opts.sub||'ترافیک از کجا خارج شود؟')}</p><div class="ob-list">${rows}</div><div class="ob-foot"><button class="btn" data-a="cancel">انصراف</button><button class="btn primary" data-a="ok"><i class="ti ti-check"></i>ادامه</button></div></div>`;
+    ov.innerHTML = `<div class="ob-box" role="dialog"><h3>${escapeHtml(opts.title||'مسیر خروجی')}</h3><p>${escapeHtml(opts.sub||'ترافیک از کجا خارج شود؟')}</p>
+      <div class="ob-list ob-picker">${outboundPickerHtml('obChoice', !!opts.multi, cur.length ? cur : [''])}</div>
+      ${opts.note?`<div class="ob-hint"><i class="ti ti-info-circle"></i> ${escapeHtml(opts.note)}</div>`:''}
+      <div class="ob-foot"><button class="btn" data-a="cancel">انصراف</button><button class="btn primary" data-a="ok"><i class="ti ti-check"></i>ادامه</button></div></div>`;
     const done = v => { document.removeEventListener('keydown', onKey); ov.remove(); resolve(v); };
     const onKey = e => { if(e.key==='Escape') done(null); };
     document.addEventListener('keydown', onKey);
     ov.addEventListener('click', e=>{
       if(e.target===ov) return done(null);
-      const a = e.target.closest('[data-a]');
-      if(a){ if(a.dataset.a==='cancel') return done(null); const c = ov.querySelector('input[name=obChoice]:checked'); return done(c ? c.value : ''); }
+      const a = e.target.closest('[data-a]'); if(!a) return;
+      if(a.dataset.a==='cancel') return done(null);
+      const vals = readOutboundPicker(ov, 'obChoice');
+      if(!vals.length){ toast('حداقل یک گزینه را انتخاب کن', false); return; }
+      done(opts.multi ? vals : vals[0]);
     });
-    ov.addEventListener('change', ()=>{ ov.querySelectorAll('.ob-row').forEach(r=>r.classList.toggle('on', r.querySelector('input').checked)); });
     document.body.appendChild(ov);
   });
 }
+
+// انتخابگر خروجی (رادیو یا چندانتخابی) — هم داخل پنجره و هم داخل drawer استفاده می‌شود
+function outboundPickerHtml(name, multi, selected){
+  const sel = new Set(selected && selected.length ? selected : ['']);
+  const type = multi ? 'checkbox' : 'radio';
+  const items = [{id:'', direct:true}, ...PROXIES_CACHE];
+  return items.map(x=>{
+    const on = sel.has(x.id);
+    const input = `<input type="${type}" name="${name}" value="${escapeHtml(x.id)}" ${on?'checked':''}>`;
+    if(x.direct) return `<label class="ob-row ${on?'on':''}">${input}<span class="ob-emoji">🚀</span><span class="ob-txt"><b>مستقیم (خود Railway)</b><small>ترافیک از IP سرور Railway خارج می‌شود</small></span></label>`;
+    return `<label class="ob-row ${on?'on':''}">${input}${flagHtml(x)}<span class="ob-txt"><b>${escapeHtml(x.name)}</b><small>${x.country?escapeHtml(x.country):'کشور نامشخص'}${x.exit_ip?' · '+escapeHtml(x.exit_ip):''}</small></span><span class="ob-badge ${pingClass(x)}">${pingText(x)}</span></label>`;
+  }).join('');
+}
+function readOutboundPicker(root, name){
+  return [...(root||document).querySelectorAll(`input[name="${name}"]:checked`)].map(i=>i.value);
+}
+function refreshOutboundPickers(){
+  document.querySelectorAll('[data-ob-picker]').forEach(box=>{
+    const name = box.dataset.obPicker;
+    const cur = readOutboundPicker(box, name);
+    box.innerHTML = outboundPickerHtml(name, box.dataset.multi==='1', cur);
+  });
+  if(typeof updateComboSummary==='function') updateComboSummary();
+}
+if(!window.__obPickerBound){
+  window.__obPickerBound = true;
+  document.addEventListener('change', e=>{
+    const inp = e.target;
+    if(!(inp && inp.matches && inp.matches('.ob-row input'))) return;
+    const grp = inp.closest('.ob-picker');
+    if(grp) grp.querySelectorAll('.ob-row').forEach(r=>r.classList.toggle('on', r.querySelector('input').checked));
+    if(typeof updateComboSummary==='function') updateComboSummary();
+  });
+}
+
+// ─────────────── مدیریت اوتباند (پنجره‌ی مستقل، از هر جا قابل‌باز شدن) ───────────────
+function openOutboundManager(){
+  ensureObStyle();
+  if(document.getElementById('obMgr')) return;
+  const ov = document.createElement('div'); ov.className = 'ob-ov'; ov.id = 'obMgr';
+  ov.innerHTML = `<div class="ob-box wide" role="dialog">
+    <h3><i class="ti ti-route"></i> اوتباند — پراکسی‌های SOCKS5</h3>
+    <p>هر SOCKS5 که اینجا اضافه کنی تست واقعی می‌شود (پینگ از داخل تونل + کشور و پرچم IP خروجی). بعد می‌توانی هر اینباند/کلاینت را روی آن بگذاری.</p>
+    <div class="ob-mgr-body">
+      <div class="row2"><div class="grp"><label>نام دلخواه</label><input id="dpxName" placeholder="مثلاً آلمان-۱"></div><div class="grp"><label>Host / آدرس کامل</label><input id="dpxHost" class="mono" style="direction:ltr;text-align:left" placeholder="1.2.3.4  یا  socks5://user:pass@host:1080"></div></div>
+      <div class="row2"><div class="grp"><label>Port</label><input id="dpxPort" class="mono" style="direction:ltr;text-align:left" value="1080"></div><div class="grp"><label>Username (اختیاری)</label><input id="dpxUser" class="mono" style="direction:ltr;text-align:left"></div></div>
+      <div class="row2"><div class="grp"><label>Password (اختیاری)</label><input id="dpxPass" type="password" class="mono" style="direction:ltr;text-align:left"></div><div class="grp" style="display:flex;align-items:flex-end"><button class="btn primary" style="width:100%" onclick="addProxyForm('dpx')"><i class="ti ti-plus"></i> افزودن و تست</button></div></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 10px"><b style="font-size:13px">پراکسی‌های ذخیره‌شده</b><button class="btn sm" onclick="testAllProxies()"><i class="ti ti-activity"></i> تست همه</button></div>
+      <div id="dProxiesListWrap"></div>
+    </div>
+    <div class="ob-foot"><button class="btn" data-a="close">بستن</button></div></div>`;
+  const close = () => { document.removeEventListener('keydown', onKey); ov.remove(); };
+  const onKey = e => { if(e.key==='Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  ov.addEventListener('click', e=>{ if(e.target===ov || e.target.closest('[data-a="close"]')) close(); });
+  document.body.appendChild(ov);
+  loadProxies();
+}
+
+// ─────────────── اینباند جدید: پیش‌فرض «یک WS + یک XHTTP در یک اشتراک» ───────────────
+function builderModeSwitch(active){
+  return `<div class="ob-seg"><button type="button" class="${active==='combo'?'on':''}" onclick="openComboDrawer()"><i class="ti ti-stack-2"></i> WS + XHTTP (یک اشتراک)</button><button type="button" class="${active==='manual'?'on':''}" onclick="openLinkDrawer('',true)"><i class="ti ti-adjustments-horizontal"></i> دستی پیشرفته</button></div>`;
+}
+async function openComboDrawer(){
+  await loadProxies();
+  const q = localStorage.getItem('vw_quick_outbound_proxy') || '';
+  const sel = PROXIES_CACHE.some(p=>p.id===q) ? [q] : [''];
+  const cats = (typeof CATEGORIES!=='undefined' ? CATEGORIES : []).map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+  const fps = (MANUAL_META.fingerprints||['chrome','firefox','safari','ios','android','edge','random']).map(x=>`<option value="${x}" ${x==='chrome'?'selected':''}>${x}</option>`).join('');
+  openDrawer('ساخت اینباند', `
+    ${builderModeSwitch('combo')}
+    <div class="ib-section"><div class="ib-section-body">
+      <div class="ib-step"><span class="num"><i class="ti ti-route" style="font-size:13px"></i></span><div><b>خروجی (Outbound)</b><small>مستقیم از Railway یا از پراکسی SOCKS5 — هر تعداد که بخواهی انتخاب کن</small></div></div>
+      <div class="ob-picker" data-ob-picker="cbExit" data-multi="1">${outboundPickerHtml('cbExit', true, sel)}</div>
+      <div class="ob-note" id="cbSummary"></div>
+      <button type="button" class="btn sm" onclick="openOutboundManager()"><i class="ti ti-route"></i> مدیریت / افزودن پراکسی</button>
+    </div></div>
+    <div class="ib-section"><div class="ib-section-body">
+      <div class="ib-step"><span class="num"><i class="ti ti-settings" style="font-size:13px"></i></span><div><b>مشخصات</b><small>برای هر کانفیگ WS و XHTTP جداگانه اعمال می‌شود (حجم، سرعت، محدودیت‌ها)</small></div></div>
+      <div class="ib-grid">
+        <div class="grp"><label>نام / Remark</label><input id="cbLabel" placeholder="خالی = نام تصادفی"></div>
+        <div class="grp"><label>دسته‌بندی</label><select id="cbCategory"><option value="0">بدون دسته</option>${cats}</select></div>
+        <div class="grp"><label>Port</label><input id="cbPort" type="number" min="1" max="65535" value="443"></div>
+        <div class="grp"><label>Fingerprint</label><select id="cbFingerprint">${fps}</select></div>
+        <div class="grp"><label>حجم (GB)</label><input id="cbLimit" type="number" min="0" placeholder="0 = نامحدود"></div>
+        <div class="grp"><label>اعتبار (روز)</label><input id="cbDays" type="number" min="0" placeholder="0 = نامحدود"></div>
+        <div class="grp"><label>IP Limit</label><input id="cbIp" type="number" min="0" value="0"></div>
+        <div class="grp"><label>Connection Limit</label><input id="cbConn" type="number" min="0" value="0"></div>
+        <div class="grp"><label>تعداد کاربر</label><input id="cbClients" type="number" min="0" max="1000" value="0" placeholder="0 = نامحدود"></div>
+        <div class="grp"><label>Speed (Mbit/s)</label><input id="cbSpeed" type="number" min="0" placeholder="0 = نامحدود"></div>
+        <div class="grp ib-full"><label>یادداشت داخلی</label><input id="cbNote" placeholder="توضیحات اختیاری"></div>
+      </div>
+    </div></div>
+  `, `<button class="btn primary" style="flex:1" id="cbSubmit" onclick="submitCombo()"><i class="ti ti-device-floppy"></i>ساخت اشتراک</button>`);
+  updateComboSummary();
+}
+function updateComboSummary(){
+  const el = document.getElementById('cbSummary'); if(!el) return;
+  const n = readOutboundPicker(document, 'cbExit').length;
+  el.innerHTML = n
+    ? `<i class="ti ti-info-circle"></i> ${n} خروجی → یک اشتراک با <b>${n} WS + ${n} XHTTP</b> (${n*2} کانفیگ)`
+    : '⚠️ حداقل یک خروجی انتخاب کن';
+}
+async function submitCombo(){
+  const exits = readOutboundPicker(document, 'cbExit');
+  if(!exits.length){ toast('حداقل یک خروجی انتخاب کن', false); return; }
+  const port = Number($('cbPort')?.value || 443);
+  if(!Number.isInteger(port) || port<1 || port>65535){ toast('پورت باید بین 1 تا 65535 باشد', false); return; }
+  const num = id => Math.max(0, Number($(id)?.value || 0));
+  const body = {
+    label: ($('cbLabel')?.value||'').trim(), category_id: $('cbCategory')?.value || '0', port,
+    fingerprint: $('cbFingerprint')?.value || 'chrome',
+    limit_value: num('cbLimit'), limit_unit: 'GB', expires_days: num('cbDays'),
+    ip_limit: num('cbIp'), connection_limit: num('cbConn'), client_limit: num('cbClients'),
+    speed_limit_value: num('cbSpeed'), speed_limit_unit: 'MBIT',
+    note: ($('cbNote')?.value||'').trim(), outbound_proxy_ids: exits
+  };
+  const btn = $('cbSubmit'); if(btn) btn.disabled = true;
+  try{
+    const r = await api('/api/links/combo', {method:'POST', body: JSON.stringify(body)});
+    loadLinks();
+    showComboResult(r);
+  }catch(e){ toast(e.message || 'خطا در ساخت اشتراک', false); if(btn) btn.disabled = false; }
+}
+
+// ─────────────── تغییر خروجی: تکی (دکمه‌ی روی کارت) یا گروهی (نوار انتخاب) ───────────────
+async function changeOutbound(uuids){
+  uuids = (uuids||[]).filter(Boolean);
+  if(!uuids.length) return;
+  const cur = uuids.length===1 ? ((LINKS.find(x=>x.uuid===uuids[0])||{}).outbound_proxy_id || '') : '';
+  const pid = await askOutboundChoice({
+    title: uuids.length===1 ? 'خروجی این اینباند' : `خروجی ${uuids.length} اینباند`,
+    sub: 'ترافیک از کجا خارج شود؟', current: cur, requireProxies: true,
+    note: 'کلاینت‌های زیرمجموعه هم همین خروجی را می‌گیرند. اتصال‌های فعلی از اتصال بعدی روی خروجی جدید می‌روند.'
+  });
+  if(pid===null) return;
+  try{
+    const r = await api('/api/links/outbound', {method:'POST', body: JSON.stringify({uuids, outbound_proxy_id: pid})});
+    toast(`خروجی ${r.updated} اینباند${r.clients?` و ${r.clients} کلاینت`:''} تنظیم شد ✓`);
+    loadLinks();
+  }catch(e){ toast(e.message, false); }
+}
+function bulkOutbound(){ changeOutbound(selectedLinkUuids()); }
 // Single source of truth for turning a link's stored fields into
 // {base_protocol, network, security}. Both the builder's initial render and
 // the edit-drawer's hidden-field sync must agree, or the visible transport
@@ -2196,6 +2358,7 @@ function manualBuilderHtml(l){
   const conn=Number(l.connection_limit||0), speed=Number(l.speed_limit_bytes||0), speedMbit=speed?Math.max(1,Math.round(speed*8/1000000)):'';
   return `
     <div class="inbound-builder">
+      ${l.uuid?'':builderModeSwitch('manual')}
       <div class="ib-hero">
         <div class="ib-title"><div class="ib-icon"><i class="ti ti-adjustments-horizontal"></i></div><div><b>${l.uuid?'ویرایش اینباند':'ساخت اینباند حرفه‌ای'}</b><small>پروتکل پایه، ترنسپورت و امنیت کاملاً تفکیک‌شده</small></div></div>
         <span class="badge gray">INBOUND BUILDER</span>
@@ -2354,7 +2517,8 @@ function onProtocolModeChange(){
   // Kept for compatibility with older inline handlers; the new builder is always advanced.
   const wrap=$('manualBuilderWrap'); if(wrap) wrap.style.display='block'; const quick=$('quickFieldsWrap'); if(quick) quick.style.display='none';
 }
-function openLinkDrawer(uid){
+function openLinkDrawer(uid, manual){
+  if(!uid && !manual){ openComboDrawer(); return; }   // اینباند جدید: پیش‌فرض یک WS + یک XHTTP
   const editing=!!uid, l=editing?(LINKS.find(x=>x.uuid===uid)||{}):{};
   openDrawer(editing?'ویرایش اینباند':'ساخت اینباند', `${manualBuilderHtml(l)}`,
     `${editing?`<button class="btn danger" onclick="deleteLink('${uid}');closeDrawer()"><i class="ti ti-trash"></i>حذف</button>`:''}<button class="btn primary" style="flex:1" onclick="submitLink('${uid||''}')"><i class="ti ti-device-floppy"></i>${editing?'ذخیره تغییرات':'ساخت اینباند'}</button>`);
