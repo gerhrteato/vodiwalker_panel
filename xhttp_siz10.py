@@ -23,6 +23,7 @@ from main import (
 )
 from relay_vless import parse_vless_header, check_and_use
 from speed_limit import throttle
+from outbound_proxy import open_target_connection
 
 router = APIRouter()
 
@@ -52,19 +53,6 @@ PACKET_UP_HIGH_WATER = 2 * 1024 * 1024  # packet-up همون منطق ساده�
 
 xhttp_sessions: dict = {}
 XHTTP_LOCK = asyncio.Lock()
-
-# حداکثر تعداد پکت‌های خارج-از-ترتیبِ بافرشده در هر سشن packet-up (دقیقاً مطابق
-# رفتار مستندشده‌ی خود Xray-core: پیش‌فرض حداکثر ۳۰ پکت، بعد از آن سشن قطع
-# می‌شه تا مصرف حافظه توسط کلاینت خراب/مخرب نامحدود نشه).
-MAX_SEQ_BUF = 30
-
-
-def _skey(uuid: str, session_id: str) -> str:
-    """کلید داخلی سشن = uuid + session_id، نه فقط session_id خام.
-    session_id رو خودِ کلاینت تصادفی می‌سازه؛ اگر فقط با session_id خام
-    ایندکس بزنیم، دو uuid/کاربر متفاوت که (به‌ندرت) session_id یکسان تولید
-    کنن می‌تونن به سشنِ همدیگه گیر بیفتن. با ترکیب uuid این امکان کاملاً حذف می‌شه."""
-    return f"{uuid}:{session_id}"
 
 FINGERPRINTS = {
     "chrome": {
@@ -185,11 +173,9 @@ def _req_client_ip(request: Request) -> str:
     return request.client.host if request.client else "نامشخص"
 
 
-async def _open_tcp_from_header(first_chunk: bytes):
+async def _open_tcp_from_header(first_chunk: bytes, link: dict | None = None):
     command, address, port, payload = await parse_vless_header(first_chunk)
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(address, port), timeout=TCP_CONNECT_TIMEOUT
-    )
+    reader, writer = await open_target_connection(link, address, port, timeout=TCP_CONNECT_TIMEOUT)
     _tune_socket(writer)
     if payload:
         writer.write(payload)
@@ -206,9 +192,8 @@ async def _check_link(uuid: str):
 
 async def _get_or_create_session(uuid: str, mode: str, session_id: str, ip: str = "نامشخص") -> dict:
     """Session بر اساس session_id که خودِ کلاینت در URL فرستاده، lazily ساخته می‌شه."""
-    key = _skey(uuid, session_id)
     async with XHTTP_LOCK:
-        sess = xhttp_sessions.get(key)
+        sess = xhttp_sessions.get(session_id)
         if sess is not None:
             sess["last_seen"] = time.time()
             return sess
@@ -237,14 +222,14 @@ async def _get_or_create_session(uuid: str, mode: str, session_id: str, ip: str 
             "gate": None,  # لازی ساخته می‌شه: _QuotaGate تطبیقی مخصوص stream-up
             "flow": None,  # لازی ساخته می‌شه: _AdaptiveFlow مخصوص stream-up
         }
-        xhttp_sessions[key] = sess
+        xhttp_sessions[session_id] = sess
         logger.info(f"new XHTTP[{mode}] session [{session_id[:8]}] uuid={uuid[:8]} ip={ip}")
         return sess
 
 
-async def _teardown(key: str):
+async def _teardown(session_id: str):
     async with XHTTP_LOCK:
-        sess = xhttp_sessions.pop(key, None)
+        sess = xhttp_sessions.pop(session_id, None)
     if not sess:
         return
     sess["closed"] = True
@@ -270,7 +255,7 @@ async def _teardown(key: str):
             dq.put_nowait(None)
         except Exception:
             pass
-    logger.info(f"closed XHTTP[{sess.get('mode')}] [{key[-8:]}] total={len(xhttp_sessions)}")
+    logger.info(f"closed XHTTP[{sess.get('mode')}] [{session_id[:8]}] total={len(xhttp_sessions)}")
 
 
 async def _reaper():
@@ -306,7 +291,7 @@ async def _pump_tcp_to_queue(session_id: str, uuid: str, reader: asyncio.StreamR
                 break
             await throttle(uuid, len(data))
             async with XHTTP_LOCK:
-                sess = xhttp_sessions.get(_skey(uuid, session_id))
+                sess = xhttp_sessions.get(session_id)
             if sess:
                 c = connections.get(sess["conn_id"])
                 if c:
@@ -314,16 +299,18 @@ async def _pump_tcp_to_queue(session_id: str, uuid: str, reader: asyncio.StreamR
             payload = (b"\x00\x00" + data) if first else data
             first = False
             await down_q.put(payload)
-    except (asyncio.CancelledError, Exception) as exc:
-        logger.debug(f"XHTTP downlink pump ended [{session_id[:8]}]: {exc!r}")
+    except (asyncio.CancelledError, Exception):
+        pass
     finally:
         await gate.flush()
-        await _teardown(_skey(uuid, session_id))
+        await _teardown(session_id)
 
 
 async def _open_tcp_for_session(session_id: str, uuid: str, sess: dict, first_chunk: bytes):
     """تونل TCP رو از روی هدر VLESS باز می‌کنه و پمپ دانلینک رو راه می‌اندازه."""
-    reader, writer, address, port = await _open_tcp_from_header(first_chunk)
+    async with LINKS_LOCK:
+        link = LINKS.get(uuid)
+    reader, writer, address, port = await _open_tcp_from_header(first_chunk, link)
     logger.info(f"connect XHTTP[{sess['mode']}] [{session_id[:8]}] -> {address}:{port}")
     sess["writer"] = writer
     sess["tcp_open"] = True
@@ -377,26 +364,18 @@ async def packet_up_upload(uuid: str, session_id: str, seq: int, request: Reques
         return {"ok": True}
 
     if not await check_and_use(uuid, len(body)):
-        await _teardown(_skey(uuid, session_id))
+        await _teardown(session_id)
         raise HTTPException(status_code=403, detail="quota/disabled/unknown")
     await throttle(uuid, len(body))
 
     stats["total_requests"] += 1
-    conn = connections.get(sess["conn_id"])
-    if conn:
-        conn["bytes"] += len(body)
+    connections[sess["conn_id"]]["bytes"] += len(body)
 
     try:
         if sess["writer"] is None:
             # اولین پکتی که حاوی هدر VLESS است، می‌تونه seq=0 نباشه اگر پکت‌ها
             # خارج از ترتیب برسن؛ بافر کوچیک برای سورت کردن seqهای زودرس.
             if seq != 0:
-                if len(sess["seq_buf"]) >= MAX_SEQ_BUF:
-                    # دقیقاً مثل Xray-core: اگر تعداد پکت‌های خارج-از-ترتیبِ
-                    # بافرشده از حد مجاز رد بشه، سشن قطع می‌شه (جلوگیری از
-                    # مصرف نامحدود حافظه توسط کلاینت خراب/کند/مخرب).
-                    await _teardown(_skey(uuid, session_id))
-                    raise HTTPException(status_code=408, detail="out-of-order buffer overflow")
                 sess["seq_buf"][seq] = body
                 return {"ok": True, "buffered": True}
             await _open_tcp_for_session(session_id, uuid, sess, body)
@@ -416,19 +395,14 @@ async def packet_up_upload(uuid: str, session_id: str, seq: int, request: Reques
                 pending = sess["seq_buf"].pop(sess["next_seq"])
                 sess["writer"].write(pending)
                 sess["next_seq"] += 1
-        elif len(sess["seq_buf"]) >= MAX_SEQ_BUF:
-            await _teardown(_skey(uuid, session_id))
-            raise HTTPException(status_code=408, detail="out-of-order buffer overflow")
         else:
             sess["seq_buf"][seq] = body
 
         if sess["writer"].transport.get_write_buffer_size() > PACKET_UP_HIGH_WATER:
             await sess["writer"].drain()
-    except HTTPException:
-        raise
     except Exception as exc:
         error_logs.append({"error": str(exc), "time": datetime.now().isoformat()})
-        await _teardown(_skey(uuid, session_id))
+        await _teardown(session_id)
         raise HTTPException(status_code=502, detail="write failed")
 
     return {"ok": True}
@@ -455,7 +429,7 @@ async def stream_up_upload(uuid: str, session_id: str, request: Request):
         flow = _AdaptiveFlow()
         sess["flow"] = flow
 
-    conn = connections.get(sess["conn_id"])  # یک بار لوک‌آپ، نه هر چانک
+    conn = connections[sess["conn_id"]]   # یک بار لوک‌آپ، نه هر چانک
     writer = sess["writer"]               # ممکنه هنوز None باشه
 
     try:
@@ -469,8 +443,7 @@ async def stream_up_upload(uuid: str, session_id: str, request: Request):
             await throttle(uuid, len(chunk))
 
             stats["total_requests"] += 1
-            if conn:
-                conn["bytes"] += len(chunk)
+            conn["bytes"] += len(chunk)
 
             if writer is None:
                 await _open_tcp_for_session(session_id, uuid, sess, chunk)
@@ -482,12 +455,12 @@ async def stream_up_upload(uuid: str, session_id: str, request: Request):
                 await flow.drain(writer)
     except HTTPException:
         await gate.flush()
-        await _teardown(_skey(uuid, session_id))
+        await _teardown(session_id)
         raise
     except Exception as exc:
         error_logs.append({"error": str(exc), "time": datetime.now().isoformat()})
         await gate.flush()
-        await _teardown(_skey(uuid, session_id))
+        await _teardown(session_id)
         raise HTTPException(status_code=502, detail="stream error")
 
     await gate.flush()
