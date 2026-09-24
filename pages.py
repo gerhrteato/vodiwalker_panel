@@ -1047,6 +1047,26 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(124,92,255,.10),tra
         <button class="btn primary" style="margin-top:14px" onclick="saveSubTemplate()"><i class="ti ti-device-floppy"></i>ذخیره الگوی ساب</button>
       </div>
 
+      <div class="card settings-card" style="margin-top:14px">
+        <div class="section-title">پراکسی IP (SOCKS) — مسیر خروجی</div>
+        <p class="hint" style="margin-bottom:12px">وقتی یک SOCKS5 اینجا اضافه کنی، یک تونل واقعی از داخلش باز می‌شه و «پینگ واقعی» + «کشور و پرچم IP خروجی» نشون داده می‌شه. بعد هر بار که «ساخت سریع»، «اینباند جدید» یا «ساخت کلاینت» می‌زنی، می‌پرسه می‌خوای با این پراکسی (روی کشور دیگه) ساخته بشه یا مستقیم از خود Railway.</p>
+        <div class="row2" style="align-items:flex-end">
+          <div class="grp"><label>نام دلخواه</label><input id="pxName" placeholder="مثلاً آلمان-۱"></div>
+          <div class="grp"><label>Host</label><input id="pxHost" class="mono" style="direction:ltr;text-align:left" placeholder="1.2.3.4  یا  socks5://user:pass@host:1080"></div>
+        </div>
+        <div class="row2" style="align-items:flex-end">
+          <div class="grp"><label>Port</label><input id="pxPort" class="mono" style="direction:ltr;text-align:left" value="1080"></div>
+          <div class="grp"><label>Username (اختیاری)</label><input id="pxUser" class="mono" style="direction:ltr;text-align:left"></div>
+        </div>
+        <div class="row2" style="align-items:flex-end">
+          <div class="grp"><label>Password (اختیاری)</label><input id="pxPass" type="password" class="mono" style="direction:ltr;text-align:left"></div>
+          <div class="grp" style="display:flex;align-items:flex-end"><button class="btn primary" onclick="addProxyForm()" style="width:100%"><i class="ti ti-plus"></i> افزودن و تست پینگ</button></div>
+        </div>
+        <div class="divider"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><b style="font-size:13px">پراکسی‌های ذخیره‌شده</b><button class="btn sm" onclick="testAllProxies()"><i class="ti ti-activity"></i> تست همه</button></div>
+        <div id="proxiesListWrap"><div class="muted" style="padding:12px">در حال بارگذاری...</div></div>
+      </div>
+
       <div class="card settings-card" style="margin-top:14px"><div class="section-title">Bot Text Studio</div><p class="hint">تمام پیام‌های کلیدی ربات را از همین پنل ویرایش کن؛ تغییرات روی ربات در اجرای بعدی/ری‌استارت اعمال می‌شوند.</p><div class="bot-text-grid"><div class="grp"><label>پیام خوش‌آمد</label><textarea id="botTxtWelcome" rows="4"></textarea></div><div class="grp"><label>منوی مدیریت</label><textarea id="botTxtAdmin" rows="4"></textarea></div><div class="grp"><label>پیام ساخت کانفیگ</label><textarea id="botTxtCreated" rows="3"></textarea></div><div class="grp"><label>پیام فروشگاه</label><textarea id="botTxtStore" rows="3"></textarea></div><div class="grp"><label>پیام پرداخت موفق</label><textarea id="botTxtPayment" rows="3"></textarea></div></div><button class="btn primary" onclick="saveBotTexts()"><i class="ti ti-device-floppy"></i>ذخیره متن‌های ربات</button></div>
 
       <div class="card advanced-settings" style="margin-top:14px"><div class="panel-head"><div><b>CONTROL CENTER PRO</b><small>ابزارهای حرفه‌ای برای شخصی‌سازی و نگهداری پنل</small></div><span class="badge green">PRO</span></div><div class="advanced-grid"><button class="pro-action" onclick="refreshOverview();toast('داده‌های زنده بروزرسانی شد ✓')"><i class="ti ti-activity-heartbeat"></i><b>Live Refresh</b><small>مانیتورینگ فوری منابع</small></button><button class="pro-action" onclick="loadSettings();toast('تنظیمات دوباره بارگذاری شد ✓')"><i class="ti ti-refresh"></i><b>Reload Settings</b><small>دریافت تنظیمات واقعی سرور</small></button><button class="pro-action" onclick="location.reload()"><i class="ti ti-reload"></i><b>Hard Reload</b><small>بارگذاری کامل رابط</small></button><button class="pro-action" onclick="navigator.clipboard?.writeText(location.origin);toast('دامنه پنل کپی شد ✓')"><i class="ti ti-world-copy"></i><b>Copy Panel URL</b><small>دامنه فعلی پنل</small></button></div></div>
@@ -1509,6 +1529,7 @@ async function boot(){
     }
   }catch(e){ location.href='/login'; return; }
   try{ const p = await api('/api/protocols'); PROTOCOLS = p.protocols||[]; MANUAL_META = p.manual||{}; }catch(e){}
+  loadProxies();
   refreshOverview();
 }
 boot();
@@ -1537,7 +1558,8 @@ async function refreshOverview(){
     $('ovBizStats').innerHTML = `
       <div><i class="ti ti-network"></i><span><b>${t.links||0}</b><small>کل اینباندها</small></span></div>
       <div><i class="ti ti-circle-check"></i><span><b>${t.active_links||0}</b><small>فعال</small></span></div>
-      <div><i class="ti ti-users"></i><span><b>${t.customers||0}</b><small>مشتریان فروشگاه</small></span></div>`;
+      <div><i class="ti ti-users"></i><span><b>${t.customers||0}</b><small>مشتریان فروشگاه</small></span></div>
+      <div><i class="ti ti-star"></i><span><b>${t.stars||0}</b><small>فروش (Stars) · ${t.orders||0} سفارش</small></span></div>`;
     const top = (rep.top_links||[]).slice(0,6);
     if(!top.length){
       $('ovTopLinks').innerHTML = '<div class="ov-empty">هنوز داده‌ی مصرفی ثبت نشده</div>';
@@ -1658,7 +1680,7 @@ function ibCardHtml(l){
         <span class="ib-status-dot ${l.status_color||'gray'}" title="${l.status_color==='green'?'در حال اتصال':(l.status_color==='red'?'غیرفعال/منقضی':'فعال - بدون اتصال')}"></span>
       </div>
     </div>
-    <div class="ib-tagrow"><span>${protoLabel(l)}</span><span>${l.network||'tcp'}/${l.security||'none'}</span>${isLive?'<span class="ib-live-tag"><i></i>LIVE</span>':'<span class="ib-linkonly-tag">LINK-ONLY</span>'}<span>${escapeHtml(l.category_name||'بدون دسته')}</span></div>
+    <div class="ib-tagrow"><span>${protoLabel(l)}</span><span>${l.network||'tcp'}/${l.security||'none'}</span>${isLive?'<span class="ib-live-tag"><i></i>LIVE</span>':'<span class="ib-linkonly-tag">LINK-ONLY</span>'}<span>${escapeHtml(l.category_name||'بدون دسته')}</span>${l.outbound?`<span class="ib-ob-tag" title="خروجی از طریق پراکسی «${escapeHtml(l.outbound.name||'')}»">${flagHtml(l.outbound)} ${escapeHtml(l.outbound.country||l.outbound.name||'')}</span>`:(l.outbound_proxy_id?'<span class="ib-ob-tag" title="پراکسی حذف شده">⚠️ پراکسی نامعتبر</span>':'')}</div>
     <div class="ib-card-addr"><span class="mono">${escapeHtml(l.address||'0.0.0.0')}:${port}</span><small>${expSub}</small></div>
     <div class="ib-card-traffic">
       <div class="ib-tf-top"><span>مصرف</span><b>${fmtBytes(l.used_bytes||0)}${l.limit_bytes>0?' / '+fmtBytes(l.limit_bytes):' / ∞'}</b></div>
@@ -1737,7 +1759,10 @@ async function openClients(uid){
 }
 async function createClient(uid){
   const label=$('clientName')?.value||''; const limit=Number($('clientLimit')?.value||0); const days=Number($('clientDays')?.value||0);
-  try{await api(`/api/links/${uid}/clients`,{method:'POST',body:JSON.stringify({label,limit_bytes:limit?limit*1024*1024*1024:0,expires_days:days})});toast('کلاینت واقعی ساخته شد ✓');openClients(uid);loadLinks();}catch(e){toast(e.message,false)}
+  const parent = LINKS.find(x=>x.uuid===uid) || {};
+  const outbound_proxy_id = await askOutboundChoice({title:'ساخت کلاینت', sub:'این کلاینت از کجا خارج شود؟', current: parent.outbound_proxy_id||''});
+  if(outbound_proxy_id===null) return;
+  try{await api(`/api/links/${uid}/clients`,{method:'POST',body:JSON.stringify({label,limit_bytes:limit?limit*1024*1024*1024:0,expires_days:days,outbound_proxy_id})});toast('کلاینت واقعی ساخته شد ✓');openClients(uid);loadLinks();}catch(e){toast(e.message,false)}
 }
 async function deleteClient(uid,cid){
   if(!confirm(t('این کلاینت حذف شود؟'))) return;
@@ -1812,8 +1837,11 @@ async function createClientMgr(uid){
   const label = $('cmClientName').value.trim();
   const limit = Number($('cmClientLimit').value) || 0;
   const days = Number($('cmClientDays').value) || 0;
+  const parent = (typeof CM_INBOUNDS!=='undefined' && CM_INBOUNDS.find(x=>x.uuid===uid)) || LINKS.find(x=>x.uuid===uid) || {};
+  const outbound_proxy_id = await askOutboundChoice({title:'ساخت کلاینت', sub:'این کلاینت از کجا خارج شود؟', current: parent.outbound_proxy_id||''});
+  if(outbound_proxy_id===null) return;
   try{
-    await api(`/api/links/${uid}/clients`, {method:'POST', body: JSON.stringify({label, limit_bytes: limit ? limit*1024*1024*1024 : 0, expires_days: days})});
+    await api(`/api/links/${uid}/clients`, {method:'POST', body: JSON.stringify({label, limit_bytes: limit ? limit*1024*1024*1024 : 0, expires_days: days, outbound_proxy_id})});
     toast('کلاینت واقعی ساخته شد ✓');
     loadClientManagerClients(uid);
   }catch(e){ toast(e.message, false); }
@@ -1918,8 +1946,214 @@ async function regenerateLink(uid){
   catch(e){ toast(e.message, false); }
 }
 async function openAutoLink(){
-  try{ await api('/api/links/auto', {method:'POST', body: JSON.stringify({profile:'balanced'})}); toast('کانفیگ خودکار ساخته شد'); loadLinks(); }
+  // ساخت سریع = یک اشتراک واحد که داخلش «یک WS + یک XHTTP» هست. قبل از ساخت می‌پرسه
+  // خروجی از خود Railway (مستقیم) باشه یا از یکی از پراکسی‌های SOCKS.
+  const choice = await askOutboundChoice({
+    title: 'ساخت سریع — یک اشتراک با WS + XHTTP',
+    sub: 'ترافیک این اشتراک از کجا خارج شود؟',
+    current: localStorage.getItem('vw_quick_outbound_proxy') || ''
+  });
+  if(choice === null) return;
+  try{
+    const r = await api('/api/links/auto', {method:'POST', body: JSON.stringify({combo:true, port:443, profile:'balanced', outbound_proxy_id: choice})});
+    loadLinks();
+    showComboResult(r);
+  }
   catch(e){ toast(e.message, false); }
+}
+function showComboResult(r){
+  const subUrl = r.sub_url || '';
+  const qr = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(subUrl);
+  const ob = r.outbound
+    ? `<div class="ob-note ok">${flagHtml(r.outbound)} خروجی از <b>${escapeHtml(r.outbound.country || r.outbound.name || '')}</b> (پراکسی «${escapeHtml(r.outbound.name||'')}»)</div>`
+    : `<div class="ob-note">🚀 خروجی مستقیم از Railway</div>`;
+  const items = (r.items||[]).map(i=>`<div class="ob-item"><b>${escapeHtml(i.label||'')}</b><small>${escapeHtml(protoLabel(i))} · پورت ${i.port||443}</small></div>`).join('');
+  openDrawer('اشتراک ساخته شد ✓', `
+    <div class="qr-box"><img src="${qr}"></div>
+    ${ob}
+    <div class="grp"><label>لینک اشتراک (یک WS + یک XHTTP)</label><div class="copy-row"><input readonly value="${escapeHtml(subUrl)}" id="comboSubInp"></div></div>
+    <div class="grp"><label>صفحه‌ی نمایش اشتراک (برای مشتری)</label><div class="copy-row"><input readonly value="${escapeHtml(r.public_url||'')}" id="comboPubInp"></div></div>
+    <div class="ob-items">${items}</div>
+    <p class="hint">همین اشتراک در تب «گروه‌های ساب» هم دیده می‌شود.</p>
+  `, `<button class="btn primary" style="width:100%" onclick="copyInput('comboSubInp')"><i class="ti ti-copy"></i>کپی لینک اشتراک</button>`);
+}
+
+// ══════════════════════ پراکسی IP (SOCKS) — مسیر خروجی ══════════════════════
+let PROXIES_CACHE = [];
+let PROXIES_ERR = '';
+async function loadProxies(){
+  try{ const r = await api('/api/proxies'); PROXIES_CACHE = r.proxies||[]; PROXIES_ERR = ''; }
+  catch(e){ PROXIES_ERR = e.message || 'خطا در دریافت لیست'; }
+  renderProxiesSettings(); renderOutboundProxySelects();
+}
+function ensureObStyle(){
+  if(document.getElementById('obStyle')) return;
+  const st = document.createElement('style'); st.id = 'obStyle';
+  st.textContent = `
+  .ob-ov{position:fixed;inset:0;background:rgba(4,6,10,.62);backdrop-filter:blur(3px);z-index:150;display:flex;align-items:center;justify-content:center;padding:16px}
+  .ob-box{width:min(460px,100%);max-height:88vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line2);border-radius:18px;box-shadow:var(--shadow-md);overflow:hidden}
+  .ob-box h3{font-size:15px;padding:16px 18px 4px}
+  .ob-box>p{font-size:12px;color:var(--sub);padding:0 18px 12px}
+  .ob-list{overflow:auto;padding:0 14px 6px;display:flex;flex-direction:column;gap:8px}
+  .ob-row{display:flex;align-items:center;gap:11px;padding:11px 12px;border:1px solid var(--line);border-radius:13px;cursor:pointer;background:var(--panel2);transition:.15s}
+  .ob-row:hover{border-color:var(--line2)}
+  .ob-row.on{border-color:var(--accent);background:rgba(148,85,255,.10)}
+  .ob-row input{accent-color:var(--accent)}
+  .ob-row .ob-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .ob-row .ob-txt b{font-size:13px}
+  .ob-row .ob-txt small,.ob-pmain small,.ob-item small{font-size:11px;color:var(--sub)}
+  .ob-foot{display:flex;gap:8px;padding:14px 16px;border-top:1px solid var(--line);margin-top:8px}
+  .ob-foot .btn{flex:1;justify-content:center}
+  .ob-flagimg{width:26px;height:19px;border-radius:3px;object-fit:cover;box-shadow:0 0 0 1px rgba(255,255,255,.12);vertical-align:middle}
+  .ob-emoji{font-size:20px;line-height:1}
+  .ob-badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;background:rgba(135,146,168,.14);color:var(--sub);white-space:nowrap}
+  .ob-badge.good{background:rgba(34,197,139,.14);color:var(--good)}
+  .ob-badge.warn{background:rgba(245,165,36,.14);color:var(--warn)}
+  .ob-badge.bad{background:rgba(242,73,85,.14);color:var(--bad)}
+  .ob-prow{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:13px;margin-bottom:9px;background:var(--panel2);flex-wrap:wrap}
+  .ob-pflag{width:30px;text-align:center}
+  .ob-pmain{flex:1;min-width:180px;display:flex;flex-direction:column;gap:3px}
+  .ob-pmain b{font-size:13px}
+  .ob-pping{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:78px}
+  .ob-pping small{font-size:10px;color:var(--sub2)}
+  .ob-ok{color:var(--good)!important}.ob-bad{color:var(--bad)!important}
+  .ib-ob-tag{display:inline-flex;align-items:center;gap:5px}
+  .ib-ob-tag .ob-flagimg{width:16px;height:12px}
+  .ob-note{padding:10px 12px;border-radius:11px;background:var(--panel2);border:1px solid var(--line);font-size:12px;margin:10px 0;display:flex;align-items:center;gap:8px}
+  .ob-note.ok{border-color:rgba(34,197,139,.35)}
+  .ob-items{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+  .ob-item{padding:9px 12px;border:1px solid var(--line);border-radius:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px}
+  `;
+  document.head.appendChild(st);
+}
+ensureObStyle();
+function flagHtml(p){
+  p = p || {};
+  const cc = String(p.country_code||'').toLowerCase();
+  const emoji = p.flag || '🏳️';
+  if(!/^[a-z]{2}$/.test(cc)) return `<span class="ob-emoji">${emoji}</span>`;
+  // ویندوز پرچم ایموجی رو نشون نمی‌ده، پس از تصویر پرچم استفاده می‌کنیم و اگه لود نشد ایموجی جایگزین می‌شه
+  return `<img class="ob-flagimg" src="https://flagcdn.com/w40/${cc}.png" alt="${cc.toUpperCase()}" loading="lazy" onerror="this.outerHTML='<span class=&quot;ob-emoji&quot;>${emoji}</span>'">`;
+}
+function pingText(p){
+  if(!p.tested_at) return 'تست‌نشده';
+  if(!p.test_ok || p.ping_ms==null) return 'قطع';
+  return `${Math.round(p.ping_ms)}ms`;
+}
+function pingClass(p){
+  if(!p.tested_at) return '';
+  if(!p.test_ok || p.ping_ms==null) return 'bad';
+  return p.ping_ms < 300 ? 'good' : (p.ping_ms < 800 ? 'warn' : 'bad');
+}
+function proxyLabel(p){
+  const flag = p.flag || '🏳️';
+  return `${flag} ${p.name} — ${p.country||'?'} · ${pingText(p)}`;
+}
+function renderOutboundProxySelects(){
+  document.querySelectorAll('[data-outbound-proxy-select]').forEach(sel=>{
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">🚀 مستقیم (خود Railway)</option>' + PROXIES_CACHE.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(proxyLabel(p))}</option>`).join('');
+    if([...sel.options].some(o=>o.value===cur)) sel.value = cur;
+  });
+}
+function renderProxiesSettings(){
+  const wrap = document.getElementById('proxiesListWrap');
+  if(!wrap) return;
+  if(PROXIES_ERR && !PROXIES_CACHE.length){ wrap.innerHTML = `<div class="notice danger-note">لیست پراکسی‌ها از سرور گرفته نشد: ${escapeHtml(PROXIES_ERR)} — مطمئن شو outbound_proxy.py و python-socks روی سرور نصب/دیپلوی شده‌اند.</div>`; return; }
+  if(!PROXIES_CACHE.length){ wrap.innerHTML = '<div class="muted" style="padding:12px">هنوز پراکسی‌ای اضافه نشده. با فرم بالا یک SOCKS5 اضافه کن.</div>'; return; }
+  const quick = localStorage.getItem('vw_quick_outbound_proxy') || '';
+  wrap.innerHTML = PROXIES_CACHE.map(p=>`
+    <div class="ob-prow">
+      <div class="ob-pflag">${flagHtml(p)}</div>
+      <div class="ob-pmain">
+        <b>${escapeHtml(p.name)}</b>
+        <small class="mono" style="direction:ltr;text-align:left">${escapeHtml(p.host)}:${p.port}${p.has_auth?' · 🔑':''}</small>
+        <small>${p.country?escapeHtml(p.country):'کشور نامشخص'}${p.exit_ip?` · IP خروجی: <span class="mono">${escapeHtml(p.exit_ip)}</span>`:''}</small>
+        ${p.test_message?`<small class="${p.test_ok?'ob-ok':'ob-bad'}">${escapeHtml(p.test_message)}</small>`:''}
+        ${p.in_use?`<small>${p.in_use} کانفیگ از این پراکسی استفاده می‌کنند</small>`:''}
+      </div>
+      <div class="ob-pping"><span class="ob-badge ${pingClass(p)}">${pingText(p)}</span><small>پینگ واقعی</small>${p.tcp_ms!=null?`<small>TCP ${Math.round(p.tcp_ms)}ms</small>`:''}</div>
+      <button class="btn sm" onclick="testProxyRow('${p.id}')"><i class="ti ti-activity"></i> تست</button>
+      <button class="btn sm" onclick="setQuickProxy('${p.id}')" title="انتخاب پیش‌فرض در پنجره‌ی «ساخت سریع»" style="${quick===p.id?'border-color:var(--accent);color:var(--accent)':''}"><i class="ti ti-star"></i></button>
+      <button class="btn sm danger" onclick="deleteProxyRow('${p.id}')"><i class="ti ti-trash"></i></button>
+    </div>`).join('');
+}
+async function testProxyRow(id, silent){
+  try{
+    if(!silent) toast('در حال تست تونل SOCKS5 و کشور خروجی...');
+    const r = await api(`/api/proxies/${id}/test`, {method:'POST'});
+    await loadProxies();
+    if(!silent){ const p=r.proxy||{}; toast(p.test_ok ? `${p.country||'?'} · ${Math.round(p.ping_ms)}ms ✓` : (p.test_message||'تست ناموفق'), !!p.test_ok); }
+  }
+  catch(e){ toast(e.message, false); }
+}
+async function testAllProxies(){
+  if(!PROXIES_CACHE.length){ toast('پراکسی‌ای برای تست نیست', false); return; }
+  toast('در حال تست همه‌ی پراکسی‌ها...');
+  for(const p of [...PROXIES_CACHE]){ await testProxyRow(p.id, true); }
+  toast('تست همه انجام شد ✓');
+}
+async function deleteProxyRow(id){
+  const p = PROXIES_CACHE.find(x=>x.id===id);
+  const warn = p && p.in_use ? `\n\n${p.in_use} کانفیگ از این پراکسی استفاده می‌کنند و به حالت «مستقیم» برمی‌گردند.` : '';
+  if(!confirm('این پراکسی حذف شود؟' + warn)) return;
+  try{ await api(`/api/proxies/${id}`, {method:'DELETE'}); if(localStorage.getItem('vw_quick_outbound_proxy')===id) localStorage.removeItem('vw_quick_outbound_proxy'); await loadProxies(); toast('حذف شد'); }
+  catch(e){ toast(e.message, false); }
+}
+function setQuickProxy(id){
+  localStorage.setItem('vw_quick_outbound_proxy', id);
+  renderProxiesSettings();
+  toast('این پراکسی در پنجره‌ی «ساخت سریع» از قبل انتخاب می‌شود ✓');
+}
+async function addProxyForm(){
+  const name = document.getElementById('pxName')?.value.trim();
+  const host = document.getElementById('pxHost')?.value.trim();
+  const port = Number(document.getElementById('pxPort')?.value||1080);
+  const username = document.getElementById('pxUser')?.value.trim();
+  const password = document.getElementById('pxPass')?.value.trim();
+  if(!host){ toast('آدرس پراکسی را وارد کنید', false); return; }
+  try{
+    const r = await api('/api/proxies', {method:'POST', body: JSON.stringify({name,host,port,username,password})});
+    document.getElementById('pxName').value=''; document.getElementById('pxHost').value=''; document.getElementById('pxPort').value='1080'; document.getElementById('pxUser').value=''; document.getElementById('pxPass').value='';
+    await loadProxies();
+    toast('پراکسی اضافه شد — در حال تست...');
+    if(r.proxy?.id) testProxyRow(r.proxy.id);
+  }catch(e){ toast(e.message, false); }
+}
+
+// پنجره‌ی انتخاب مسیر خروجی: «مستقیم (خود Railway)» یا یکی از پراکسی‌ها.
+// Promise برمی‌گردونه: '' = مستقیم، id = پراکسی، null = انصراف.
+// اگه هیچ پراکسی‌ای تعریف نشده باشه بدون پرسیدن '' برمی‌گردونه.
+async function askOutboundChoice(opts){
+  opts = opts || {};
+  try{ await loadProxies(); }catch(e){}
+  if(!PROXIES_CACHE.length) return '';
+  ensureObStyle();
+  const cur = opts.current || '';
+  const items = [{id:'', direct:true}, ...PROXIES_CACHE];
+  const has = items.some(x=>x.id===cur);
+  const sel = has ? cur : '';
+  return new Promise(resolve=>{
+    const ov = document.createElement('div'); ov.className = 'ob-ov';
+    const rows = items.map(x=>{
+      const on = x.id===sel;
+      if(x.direct) return `<label class="ob-row ${on?'on':''}"><input type="radio" name="obChoice" value="" ${on?'checked':''}><span class="ob-emoji">🚀</span><span class="ob-txt"><b>مستقیم (خود Railway)</b><small>ترافیک از IP سرور Railway خارج می‌شود</small></span></label>`;
+      const badge = `<span class="ob-badge ${pingClass(x)}">${pingText(x)}</span>`;
+      const detail = `${x.country?escapeHtml(x.country):'کشور نامشخص'}${x.id===cur?' · انتخاب فعلی':''}`;
+      return `<label class="ob-row ${on?'on':''}"><input type="radio" name="obChoice" value="${escapeHtml(x.id)}" ${on?'checked':''}>${flagHtml(x)}<span class="ob-txt"><b>${escapeHtml(x.name)}</b><small>${detail}</small></span>${badge}</label>`;
+    }).join('');
+    ov.innerHTML = `<div class="ob-box" role="dialog"><h3>${escapeHtml(opts.title||'مسیر خروجی')}</h3><p>${escapeHtml(opts.sub||'ترافیک از کجا خارج شود؟')}</p><div class="ob-list">${rows}</div><div class="ob-foot"><button class="btn" data-a="cancel">انصراف</button><button class="btn primary" data-a="ok"><i class="ti ti-check"></i>ادامه</button></div></div>`;
+    const done = v => { document.removeEventListener('keydown', onKey); ov.remove(); resolve(v); };
+    const onKey = e => { if(e.key==='Escape') done(null); };
+    document.addEventListener('keydown', onKey);
+    ov.addEventListener('click', e=>{
+      if(e.target===ov) return done(null);
+      const a = e.target.closest('[data-a]');
+      if(a){ if(a.dataset.a==='cancel') return done(null); const c = ov.querySelector('input[name=obChoice]:checked'); return done(c ? c.value : ''); }
+    });
+    ov.addEventListener('change', ()=>{ ov.querySelectorAll('.ob-row').forEach(r=>r.classList.toggle('on', r.querySelector('input').checked)); });
+    document.body.appendChild(ov);
+  });
 }
 // Single source of truth for turning a link's stored fields into
 // {base_protocol, network, security}. Both the builder's initial render and
@@ -2006,15 +2240,16 @@ function manualBuilderHtml(l){
             <div class="grp"><label>Port</label><div class="endpoint-input"><input id="mPort" type="number" min="1" max="65535" value="${l.port||443}" oninput="updateBuilderSummary()"><button type="button" class="btn endpoint-btn" onclick="testCurrentTcp()"><i class="ti ti-activity"></i>Ping</button></div></div>
             <div class="grp"><label>Fingerprint</label><select id="mFingerprint">${fpOpts}</select></div>
             <div class="grp"><label>ALPN</label><input id="mAlpn" value="${escapeHtml(l.alpn||'')}" placeholder="h2,http/1.1"></div>
+            <div class="grp ib-full"><label>مسیر خروجی (Outbound) — مستقیم یا پراکسی؟</label><select id="mOutboundProxy" data-outbound-proxy-select><option value="">🚀 مستقیم (Railway)</option></select><div class="hint">اگه یک پراکسی انتخاب کنی، اتصال به مقصد از طریق همون SOCKS5 رد می‌شه (روی کشور اون پراکسی ظاهر می‌شه). از تب «تنظیمات» پراکسی اضافه/تست کن.</div></div>
             <div id="mWsXhttpWrap" class="ib-grid ib-full">
-              <div class="grp"><label>Path</label><input id="mPath" placeholder="/ws" value="${escapeHtml(l.path||'')}"></div>
+              <div class="grp"><label>Path</label><input id="mPath" placeholder="خالی = مسیر خودکار سرور (پیشنهادی)" value="${escapeHtml(l.path||'')}"></div>
               <div class="grp"><label>Host Header</label><input id="mHost" placeholder="domain.com" value="${escapeHtml(l.host_header||'')}"></div>
             </div>
-            <div id="mXhttpModeWrap" class="grp ib-full"><label>XHTTP Mode</label><select id="mXhttpMode">${(MANUAL_META.xhttp_modes||['auto','packet-up','stream-up','stream-one']).map(x=>`<option value="${x}" ${(l.xhttp_mode||'packet-up')===x?'selected':''}>${x}</option>`).join('')}</select><small style="opacity:.7">packet-up و stream-up توسط این پنل واقعاً سرو می‌شن؛ auto به‌صورت خودکار روی packet-up قفل می‌شه، stream-one فقط لینک می‌سازه (Live نیست).</small></div>
+            <div id="mXhttpModeWrap" class="grp ib-full"><label>XHTTP Mode</label><select id="mXhttpMode">${(MANUAL_META.xhttp_modes||['auto','packet-up','stream-up','stream-one']).map(x=>`<option value="${x}" ${(l.xhttp_mode||'auto')===x?'selected':''}>${x}</option>`).join('')}</select></div>
             <div id="mGrpcWrap" class="ib-grid ib-full"><div class="grp"><label>Service Name</label><input id="mGrpcService" placeholder="service" value="${escapeHtml(l.grpc_service_name||'')}"></div><div class="grp"><label>gRPC Mode</label><select id="mGrpcMode"><option value="gun" ${(l.grpc_mode||'gun')==='gun'?'selected':''}>gun</option><option value="multi" ${l.grpc_mode==='multi'?'selected':''}>multi</option></select></div></div>
             <div id="mTcpWrap" class="ib-grid ib-full"><div class="grp"><label>Header Type</label><select id="mHeaderType"><option value="" ${!l.header_type?'selected':''}>none</option><option value="http" ${l.header_type==='http'?'selected':''}>http</option></select></div><div class="grp"><label>Flow</label><select id="mFlow"><option value="" ${!l.flow?'selected':''}>—</option><option value="xtls-rprx-vision" ${l.flow==='xtls-rprx-vision'?'selected':''}>xtls-rprx-vision</option></select></div></div>
             <div id="mTlsWrap" class="ib-grid ib-full"><div class="grp"><label>SNI</label><input id="mSni" value="${escapeHtml(l.sni||'')}" placeholder="example.com"></div><label class="chk" style="align-self:end;margin-bottom:16px"><input id="mAllowInsecure" type="checkbox" ${l.allow_insecure?'checked':''}> Allow Insecure</label></div>
-            <div id="mRealityWrap" class="ib-grid ib-full"><div class="grp"><label>Reality SNI</label><input id="mRealitySni" value="${escapeHtml(l.sni||'')}" placeholder="www.example.com"></div><div class="grp"><label>Public Key</label><input id="mRealityPbk" value="${escapeHtml(l.reality_public_key||'')}" placeholder="public key"></div><div class="grp"><label>Short ID</label><input id="mRealitySid" value="${escapeHtml(l.reality_short_id||'')}" placeholder="short id"></div><div class="grp"><label>Spider X</label><input id="mRealitySpx" value="${escapeHtml(l.reality_spider_x||'/')}" placeholder="/"></div><div class="grp ib-full"><label>Private Key (فقط برای نود Xray-core خودتان — این پنل ذخیره‌اش نمی‌کند)</label><div class="endpoint-input"><input id="mRealityPrivRaw" readonly placeholder="بعد از «Generate Reality Keypair» اینجا نمایش داده می‌شود" value=""><button type="button" class="btn endpoint-btn" onclick="copyText($('mRealityPrivRaw').value)"><i class="ti ti-copy"></i>Copy</button></div></div><div class="ib-full"><button type="button" class="btn" onclick="generateRealityKeys()"><i class="ti ti-key"></i>Generate Reality Keypair</button></div></div>
+            <div id="mRealityWrap" class="ib-grid ib-full"><div class="grp"><label>Reality SNI</label><input id="mRealitySni" value="${escapeHtml(l.sni||'')}" placeholder="www.example.com"></div><div class="grp"><label>Public Key</label><input id="mRealityPbk" value="${escapeHtml(l.reality_public_key||'')}" placeholder="public key"></div><div class="grp"><label>Short ID</label><input id="mRealitySid" value="${escapeHtml(l.reality_short_id||'')}" placeholder="short id"></div><div class="grp"><label>Spider X</label><input id="mRealitySpx" value="${escapeHtml(l.reality_spider_x||'/')}" placeholder="/"></div><div class="ib-full"><button type="button" class="btn" onclick="generateRealityKeys()"><i class="ti ti-key"></i>Generate Reality Keypair</button></div></div>
             <div id="mShadowWrap" class="ib-grid ib-full"><div class="grp"><label>Encryption Method</label><select id="mSsMethod">${methodOpts}</select></div><div class="grp"><label>Password</label><input id="mSsPassword" type="password" value="${escapeHtml(l.ss_password||'')}" placeholder="Password / secret"></div></div>
             <div class="grp"><label>حجم (GB)</label><input id="fLimitVal" type="number" min="0" value="${l.limit_bytes?Math.round(l.limit_bytes/1073741824):''}"></div>
             <div class="grp"><label>اعتبار (روز)</label><input id="fDays" type="number" min="0" value="${l.expires_at?Math.max(0,Math.ceil((new Date(l.expires_at).getTime()-Date.now())/86400000)):''}"></div>
@@ -2023,7 +2258,6 @@ function manualBuilderHtml(l){
             <div class="grp"><label>Connection Limit</label><input id="fConnLimit" type="number" min="0" value="${conn}"></div>
             <div class="grp"><label>تعداد کاربر</label><input id="fClientLimit" type="number" min="0" max="1000" value="${l.client_limit||0}" placeholder="0 = نامحدود"></div>
             <div class="grp"><label>تعداد خروجی</label><input id="fConfigCount" type="number" min="1" max="40" value="${l.config_count||1}"></div>
-            <div class="grp ib-full"><label>آی‌پی‌های تمیز (Clean IP) — هر خط یک آی‌پی/دامنه</label><textarea id="fCleanIps" rows="3" placeholder="1.2.3.4&#10;5.6.7.8&#10;clean.example.com" style="width:100%;resize:vertical;font-family:monospace">${escapeHtml((l.clean_ips||[]).join('\n'))}</textarea><small style="opacity:.7">اگه اینجا چند آی‌پی/دامنه بذاری، «تعداد خروجی» به همون تعداد کانفیگ می‌سازه که هرکدوم روی یکی از این آی‌پی‌ها می‌ره (همه توی یک سابسکریپشن)؛ اگه خالی باشه، فقط همون تعداد کپیِ یک کانفیگ با نام‌های متفاوت ساخته می‌شه.</small></div>
             <div class="grp"><label>Speed (Mbit/s)</label><input id="fSpeed" type="number" min="0" value="${speedMbit}" placeholder="0 = نامحدود"></div>
             <div class="grp ib-full"><label>یادداشت داخلی</label><input id="fNote" value="${escapeHtml(l.note||'')}" placeholder="توضیحات اختیاری"></div>
           </div>
@@ -2079,7 +2313,7 @@ function onManualChange(){
   if(base==='shadowsocks'){ if($('mNetwork') && $('mNetwork').value!=='tcp') $('mNetwork').value='tcp'; if($('mSecurity')) $('mSecurity').value='none'; }
   const hint=$('mLiveHint');
   if(hint){
-    const live=base!=='shadowsocks' && (MANUAL_META.live_combos||[]).some(c=>c[0]===net&&c[1]===sec) && !(net==='xhttp'&&($('mXhttpMode')?.value||'packet-up')==='stream-one');
+    const live=base!=='shadowsocks' && (MANUAL_META.live_combos||[]).some(c=>c[0]===net&&c[1]===sec) && !(net==='xhttp'&&($('mXhttpMode')?.value||'auto')==='stream-one');
     hint.className='ib-status '+(live?'ok':'warn'); hint.innerHTML=live?'<i class="ti ti-circle-check"></i> این ترکیب آماده استفاده است.':'<i class="ti ti-alert-triangle"></i> این ترکیب برای ساخت لینک و مدیریت سرویس آماده شده است.';
   }
   const tn=$('ibTransportNote');
@@ -2112,13 +2346,7 @@ async function loadRailwayEndpoint(){
 }
 
 async function generateRealityKeys(){
-  try{
-    const r=await api('/api/reality-keypair');
-    $('mRealityPbk').value=r.public_key;
-    $('mRealitySid').value=r.short_id;
-    if($('mRealityPrivRaw')) $('mRealityPrivRaw').value=r.private_key||'';
-    toast('کلید Reality ساخته شد — Private Key را همین‌جا کپی کنید و روی نود Xray-core خودتان قرار دهید (این پنل آن را ذخیره نمی‌کند).');
-  }
+  try{ const r=await api('/api/reality-keypair'); $('mRealityPbk').value=r.public_key; $('mRealitySid').value=r.short_id; toast('کلید Reality ساخته شد. Private Key را روی نود خودتان نگه دارید.'); }
   catch(e){ toast(e.message, false); }
 }
 
@@ -2139,6 +2367,9 @@ function openLinkDrawer(uid){
     net.value=parts.net;
     sec.value=parts.sec;
     if(bp.value==='shadowsocks'){net.value='tcp';sec.value='none'}
+    renderOutboundProxySelects();
+    const opx=document.getElementById('mOutboundProxy'); if(opx) opx.value = l.outbound_proxy_id || '';
+    loadProxies().then(()=>{ const o=document.getElementById('mOutboundProxy'); if(o) o.value = l.outbound_proxy_id || ''; });
     refreshInboundCards(); onManualChange(); updateBuilderSummary();
   },0);
 }
@@ -2149,8 +2380,8 @@ async function submitLink(uid){
   if(!Number.isInteger(port)||port<1||port>65535){toast('پورت باید بین 1 تا 65535 باشد',false);return}
   if(base==='shadowsocks' && net!=='tcp'){toast('Shadowsocks فقط با TCP ساخته می‌شود',false);return}
   const num=id=>Math.max(0,Number($(id)?.value||0));
-  const body={label:($('fLabel')?.value||'').trim(),protocol:'manual',category_id:$('fCategory')?.value||'0',limit_value:num('fLimitVal'),limit_unit:'GB',expires_days:num('fDays'),expires_at:$('fExpiresAt')?.value||'',ip_limit:num('fIpLimit'),connection_limit:num('fConnLimit'),client_limit:num('fClientLimit'),config_count:Math.max(1,Math.min(40,num('fConfigCount')||1)),clean_ips:($('fCleanIps')?.value||'').trim(),speed_limit_value:num('fSpeed'),speed_limit_unit:'MBIT',note:($('fNote')?.value||'').trim(),port,fingerprint:$('mFingerprint')?.value||'chrome',alpn:$('mAlpn')?.value||''};
-  body.manual={base_protocol:base,network:net,security:base==='shadowsocks'?'none':sec,address:$('mAddress')?.value||'',path:$('mPath')?.value||'',host_header:$('mHost')?.value||'',sni:sec==='reality'?($('mRealitySni')?.value||''):($('mSni')?.value||''),alpn:$('mAlpn')?.value||'',flow:$('mFlow')?.value||'',grpc_service_name:$('mGrpcService')?.value||'',grpc_mode:$('mGrpcMode')?.value||'gun',xhttp_mode:$('mXhttpMode')?.value||'packet-up',header_type:$('mHeaderType')?.value||'',allow_insecure:!!$('mAllowInsecure')?.checked,reality_public_key:$('mRealityPbk')?.value||'',reality_short_id:$('mRealitySid')?.value||'',reality_spider_x:$('mRealitySpx')?.value||'/',ss_method:$('mSsMethod')?.value||'chacha20-ietf-poly1305',ss_password:$('mSsPassword')?.value||''};
+  const body={label:($('fLabel')?.value||'').trim(),protocol:'manual',category_id:$('fCategory')?.value||'0',limit_value:num('fLimitVal'),limit_unit:'GB',expires_days:num('fDays'),expires_at:$('fExpiresAt')?.value||'',ip_limit:num('fIpLimit'),connection_limit:num('fConnLimit'),client_limit:num('fClientLimit'),config_count:Math.max(1,Math.min(40,num('fConfigCount')||1)),speed_limit_value:num('fSpeed'),speed_limit_unit:'MBIT',note:($('fNote')?.value||'').trim(),port,fingerprint:$('mFingerprint')?.value||'chrome',alpn:$('mAlpn')?.value||'',outbound_proxy_id:$('mOutboundProxy')?.value||''};
+  body.manual={base_protocol:base,network:net,security:base==='shadowsocks'?'none':sec,address:$('mAddress')?.value||'',path:$('mPath')?.value||'',host_header:$('mHost')?.value||'',sni:sec==='reality'?($('mRealitySni')?.value||''):($('mSni')?.value||''),alpn:$('mAlpn')?.value||'',flow:$('mFlow')?.value||'',grpc_service_name:$('mGrpcService')?.value||'',grpc_mode:$('mGrpcMode')?.value||'gun',xhttp_mode:$('mXhttpMode')?.value||'auto',header_type:$('mHeaderType')?.value||'',allow_insecure:!!$('mAllowInsecure')?.checked,reality_public_key:$('mRealityPbk')?.value||'',reality_short_id:$('mRealitySid')?.value||'',reality_spider_x:$('mRealitySpx')?.value||'/',ss_method:$('mSsMethod')?.value||'chacha20-ietf-poly1305',ss_password:$('mSsPassword')?.value||''};
   try{if(uid) await api(`/api/links/${uid}`,{method:'PATCH',body:JSON.stringify(body)});else await api('/api/links',{method:'POST',body:JSON.stringify(body)});toast(uid?'اینباند بروزرسانی شد':'اینباند با موفقیت ساخته شد');closeDrawer();loadLinks();}
   catch(e){toast(e.message||'خطا در ذخیره اینباند',false)}
 }
@@ -2530,6 +2761,7 @@ async function loadSettings(){
     if($('subTplInbound')) $('subTplInbound').checked = !!s.sub_remark_show_inbound;
     updateSubTemplatePreview();
     try{ const bt=await api('/api/bot/texts'); const x=bt.texts||{}; if($('botTxtWelcome'))$('botTxtWelcome').value=x.welcome||''; if($('botTxtAdmin'))$('botTxtAdmin').value=x.admin_menu||''; if($('botTxtCreated'))$('botTxtCreated').value=x.config_created||''; if($('botTxtStore'))$('botTxtStore').value=x.store_intro||''; if($('botTxtPayment'))$('botTxtPayment').value=x.payment_success||''; }catch(_){}
+    loadProxies();
   }catch(e){ toast(e.message, false); }
 }
 function updateSubTemplatePreview(){
