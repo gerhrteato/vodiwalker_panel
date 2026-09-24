@@ -815,6 +815,7 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(124,92,255,.10),tra
       <div class="tab" data-pg="subgroups"><i class="ti ti-folders"></i><span data-i18n="nav_subgroups">گروه‌های ساب</span><span class="bd" id="nb-subs">0</span></div>
       <div class="tab tab-locked" data-pg="plans" title="در نسخه‌های بعد فعال می‌شود"><i class="ti ti-lock"></i><span data-i18n="nav_plans">پلن‌های فروش</span><span class="bd">بعداً</span></div>
       <div class="tab" data-pg="reports"><i class="ti ti-chart-histogram"></i><span data-i18n="nav_reports">گزارش‌ها</span></div>
+      <div class="tab" data-pg="nodes"><i class="ti ti-server-cog"></i><span data-i18n="nav_nodes">نودها</span></div>
       <div class="tab" data-pg="admins"><i class="ti ti-users-group"></i><span data-i18n="nav_admins">ادمین‌ها</span></div>
       <div class="tab" data-pg="activity"><i class="ti ti-history"></i><span data-i18n="nav_activity">فعالیت‌ها</span></div>
       <div class="tab" data-pg="messages"><i class="ti ti-bell-ringing"></i><span data-i18n="nav_messages">پیام‌ها</span><span class="bd danger-bd" id="nb-errors">0</span></div>
@@ -834,11 +835,13 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(124,92,255,.10),tra
     <button class="hamburger" onclick="toggleSidebar()"><i class="ti ti-menu-2"></i></button>
     <div class="page-title"><span id="pageTitleMain" data-i18n="nav_overview">داشبورد</span><span id="pageTitleSub" data-i18n="pt_overview">وضعیت لحظه‌ای سرویس، کانفیگ‌ها و ربات فروش</span></div>
     <div class="top-right">
+      <button class="nd-switch" id="nodeSwitchBtn" style="display:none" onclick="openNodeSwitcher()" title="انتخاب پنل/نود برای مدیریت"></button>
       <button class="icon-btn" id="themeToggle" onclick="toggleTheme()" title="تغییر پوسته"><i class="ti ti-moon"></i></button>
       <a class="icon-btn" href="/logout" title="خروج"><i class="ti ti-logout"></i></a>
     </div>
   </div>
 
+  <div class="nd-banner" id="nodeBanner" style="display:none"></div>
   <div class="body-wrap">
 
     <!-- OVERVIEW -->
@@ -959,6 +962,15 @@ body{background:radial-gradient(900px 500px at 75% -10%,rgba(124,92,255,.10),tra
       </div>
       <div class="card admin-directory" id="adminReqCard" style="margin-bottom:14px;display:none"><div class="panel-head"><div><b>درخواست‌های ثبت‌نام ادمینی</b><small>افرادی که از صفحه ورود درخواست همکاری داده‌اند؛ بررسی کن و تصمیم بگیر.</small></div><span class="command-badge" id="adminReqBadge">۰ درخواست</span></div><div id="adminReqBody" style="padding:14px 18px"></div></div>
       <div class="card admin-directory"><div class="panel-head"><div><b>فهرست ادمین‌ها</b><small>وضعیت، دسترسی و فعالیت هر ادمین را از یکجا بررسی و مدیریت کن.</small></div><span class="directory-live"><i></i> کنترل فعال</span></div><div class="admin-grid" id="adminsBody"></div></div>
+    </div>
+
+    <!-- NODES -->
+    <div class="page" id="pg-nodes">
+      <div class="pg-head"><div><div class="eyebrow"><span class="live-dot"></span> VODIWALKER · NODES</div><h1>نودها</h1><p>چند پنل VodiWalker را به هم وصل کن و همه را از یک پنل مدیریت کن.</p></div>
+        <div class="toolbar"><button class="btn" onclick="checkAllNodes()"><i class="ti ti-refresh"></i>بررسی همه</button><button class="btn primary" onclick="openNodeDrawer()"><i class="ti ti-plus"></i>افزودن نود</button></div>
+      </div>
+      <div class="card" style="margin-bottom:14px"><div class="panel-head"><div><b><i class="ti ti-key"></i> توکن این پنل (وقتی این پنل «نود» است)</b><small>توکن را کپی کن و در پنل اصلی، بخش نودها، بچسبان</small></div></div><div style="padding:0 18px 18px" id="nodeTokenBody"></div></div>
+      <div class="card"><div class="panel-head"><div><b>نودهای متصل به این پنل</b><small>وضعیت هر ۳۰ ثانیه به‌روز می‌شود · «مدیریت» کل پنل را روی همان نود اجرا می‌کند</small></div></div><div style="padding:0 18px 18px" id="nodesList"></div></div>
     </div>
 
     <!-- ACTIVITY -->
@@ -1100,8 +1112,16 @@ function toast(msg, ok=true){
   $('toastWrap').appendChild(t);
   setTimeout(()=>t.remove(), 3800);
 }
+// وقتی یک «نود» برای مدیریت انتخاب شده، APIهای عملیاتی از طریق پنل اصلی روی نود اجرا می‌شن.
+const ACTIVE_NODE = (()=>{ try{ return JSON.parse(sessionStorage.getItem('vw_active_node')||'null'); }catch(e){ return null; } })();
+const NODE_FWD_PREFIXES = ['/api/links','/api/proxies','/api/subs','/api/categories','/api/protocols','/api/reality-keypair','/api/connections','/api/telemetry','/api/system','/api/network','/api/reports','/api/activity','/api/errors','/api/plans','/stats'];
+function nodeRewrite(path){
+  if(!ACTIVE_NODE) return path;
+  const p = String(path).split('?')[0].replace(/\/+$/,'');
+  return NODE_FWD_PREFIXES.some(x=>p===x || p.startsWith(x+'/')) ? `/api/nodes/${ACTIVE_NODE.id}/fwd${path}` : path;
+}
 async function api(path, opts={}){
-  const res = await fetch(path, {credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...opts});
+  const res = await fetch(nodeRewrite(path), {credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...opts});
   let data = {};
   try{ data = await res.json(); }catch(e){}
   if(!res.ok){
@@ -1145,7 +1165,7 @@ function gotoPage(pg){
   CURRENT_PAGE = pg;
   updatePageTitle(pg);
   document.getElementById('app').classList.remove('sb-open');
-  const loaders = {overview:refreshOverview, links:loadLinks, clientmgr:loadClientManager, categories:loadCategories, subgroups:loadSubGroups,
+  const loaders = {overview:refreshOverview, links:loadLinks, clientmgr:loadClientManager, categories:loadCategories, subgroups:loadSubGroups, nodes:loadNodesPage,
     reports:loadReports, admins:()=>{loadAdmins();loadAdminRequests();}, activity:loadActivity, messages:loadMessages, settings:()=>{loadSettings();loadDiagnostics();}};
   if(loaders[pg]) loaders[pg]();
 }
@@ -1214,7 +1234,7 @@ var DASH_I18N = {
   fa: {
     dir:'rtl', brand:'VodiWalker',
     nav_overview:'داشبورد', nav_links:'اینباندها', nav_clientmgr:'ساخت کلاینت', nav_categories:'دسته‌بندی‌ها', nav_subgroups:'گروه‌های ساب',
-    nav_plans:'پلن‌های فروش', nav_reports:'گزارش‌ها', nav_admins:'ادمین‌ها', nav_activity:'فعالیت‌ها', nav_messages:'پیام‌ها', nav_settings:'تنظیمات',
+    nav_plans:'پلن‌های فروش', nav_reports:'گزارش‌ها', nav_admins:'ادمین‌ها', nav_nodes:'نودها', nav_activity:'فعالیت‌ها', nav_messages:'پیام‌ها', nav_settings:'تنظیمات',
     pt_overview:'وضعیت لحظه‌ای سرویس، کانفیگ‌ها و ربات فروش',
     pt_links:'مدیریت حرفه‌ای اینباندها، کلاینت‌ها و لینک‌های اشتراک',
     pt_clientmgr:'ساخت کلاینت واقعی از روی اینباند دلخواه، جدا از صفحه اینباندها',
@@ -1223,6 +1243,7 @@ var DASH_I18N = {
     pt_plans:'پلن‌هایی که در ربات فروش تلگرام نمایش داده می‌شوند',
     pt_reports:'خلاصه‌ی عملکرد فروش و کانفیگ‌ها',
     pt_admins:'حساب‌های دسترسی جانبی به پنل (فقط مالک)',
+    pt_nodes:'اتصال چند پنل VodiWalker به هم و مدیریت یکجا',
     pt_activity:'۱۵۰ رویداد اخیر پنل',
     pt_messages:'مرکز خطاها، هشدارها و پیام‌های سیستم',
     pt_settings:'آدرس عمومی پنل، ربات فروش تلگرام و رمز عبور'
@@ -1230,7 +1251,7 @@ var DASH_I18N = {
   en: {
     dir:'ltr', brand:'VodiWalker',
     nav_overview:'Overview', nav_links:'Inbounds', nav_clientmgr:'Create Client', nav_categories:'Categories', nav_subgroups:'Sub Groups',
-    nav_plans:'Sale Plans', nav_reports:'Reports', nav_admins:'Admins', nav_activity:'Activity', nav_messages:'Messages', nav_settings:'Settings',
+    nav_plans:'Sale Plans', nav_reports:'Reports', nav_admins:'Admins', nav_nodes:'Nodes', nav_activity:'Activity', nav_messages:'Messages', nav_settings:'Settings',
     pt_overview:'Live status of the service, configs and sales bot',
     pt_links:'Manage inbounds, clients and subscription links',
     pt_clientmgr:'Create a real client from any inbound, separate from the inbounds page',
@@ -1239,6 +1260,7 @@ var DASH_I18N = {
     pt_plans:'Plans shown in the Telegram sales bot',
     pt_reports:'Summary of sales and config performance',
     pt_admins:'Secondary panel access accounts (owner only)',
+    pt_nodes:'Connect several VodiWalker panels and manage them from one place',
     pt_activity:'Last 150 panel events',
     pt_messages:'Errors, warnings and system messages',
     pt_settings:'Panel public URL, Telegram sales bot and password'
@@ -1514,6 +1536,269 @@ function enableDashTranslation(){
 applyDashLang(getDashLang());
 enableDashTranslation();
 
+// ══════════════════════════════ نودها (اتصال چند پنل) ══════════════════════════════
+// این پنل هم می‌تواند «نود» باشد (توکن می‌سازد و کپی می‌کنی) و هم «اصلی» (آدرس + توکن نودها را می‌گیرد).
+let NODES_LIST = [];
+let NODE_TOKEN = {enabled:false, token:null, created_at:null};
+let NODE_TOKEN_SHOWN = false;
+let NODES_TIMER = null;
+
+function nodeStyle(){
+  if(document.getElementById('ndStyle')) return;
+  const st = document.createElement('style'); st.id = 'ndStyle';
+  st.textContent = `
+  .nd-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 18px;background:linear-gradient(90deg,rgba(245,165,36,.18),rgba(245,165,36,.06));border-bottom:1px solid rgba(245,165,36,.4);font-size:13px}
+  .nd-banner b{color:var(--warn)}
+  .nd-banner .btn{margin-inline-start:auto}
+  .nd-switch{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border:1px solid var(--line2);border-radius:11px;background:var(--panel2);color:var(--text);cursor:pointer;font-size:12.5px;font-weight:700;font-family:inherit}
+  .nd-switch.remote{border-color:rgba(245,165,36,.6);color:var(--warn)}
+  .nd-dot{width:9px;height:9px;border-radius:50%;background:var(--sub2);display:inline-block;flex:none}
+  .nd-dot.on{background:var(--good);box-shadow:0 0 0 3px rgba(34,197,139,.18)}
+  .nd-dot.off{background:var(--bad);box-shadow:0 0 0 3px rgba(242,73,85,.16)}
+  .nd-tokenbox{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}
+  .nd-tokenbox input{flex:1;min-width:220px;direction:ltr;text-align:left;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}
+  .nd-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:14px}
+  .nd-step{padding:11px 13px;border:1px dashed var(--line2);border-radius:12px;font-size:12px;color:var(--sub);line-height:1.8}
+  .nd-step b{color:var(--text);display:block;margin-bottom:2px}
+  .nd-row{display:flex;gap:14px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--panel2);margin-bottom:10px;flex-wrap:wrap}
+  .nd-main{flex:1;min-width:220px;display:flex;flex-direction:column;gap:5px}
+  .nd-main b{font-size:14px;display:flex;align-items:center;gap:8px}
+  .nd-main small{font-size:11.5px;color:var(--sub)}
+  .nd-metrics{display:flex;gap:8px;flex-wrap:wrap}
+  .nd-m{padding:6px 10px;border-radius:10px;background:var(--panel);border:1px solid var(--line);font-size:11px;color:var(--sub);display:flex;flex-direction:column;gap:1px;min-width:74px}
+  .nd-m b{font-size:13px;color:var(--text)}
+  .nd-acts{display:flex;gap:6px;flex-wrap:wrap}
+  .nd-err{color:var(--bad)!important}
+  `;
+  document.head.appendChild(st);
+}
+nodeStyle();
+
+const fmtUptime = s => { s = Number(s)||0; const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60); return d?`${d}d ${h}h`:(h?`${h}h ${m}m`:`${m}m`); };
+function nodeCopy(text, okMsg){
+  const done = ()=>toast(okMsg || 'کپی شد ✓');
+  if(navigator.clipboard && window.isSecureContext){ navigator.clipboard.writeText(text).then(done, ()=>nodeFallbackCopy(text, done)); }
+  else nodeFallbackCopy(text, done);
+}
+function nodeFallbackCopy(text, done){
+  const t = document.createElement('textarea'); t.value = text; t.style.position='fixed'; t.style.opacity='0'; document.body.appendChild(t); t.select();
+  try{ document.execCommand('copy'); done(); }catch(e){ toast('کپی نشد؛ دستی انتخاب و کپی کن', false); }
+  t.remove();
+}
+
+// ───────────── توکن این پنل (وقتی این پنل نود است) ─────────────
+async function loadNodeToken(){
+  try{ NODE_TOKEN = await api('/api/node/token'); }catch(e){ NODE_TOKEN = {enabled:false, token:null}; }
+  renderNodeToken();
+}
+function renderNodeToken(){
+  const box = document.getElementById('nodeTokenBody'); if(!box) return;
+  const origin = location.origin;
+  if(!NODE_TOKEN.enabled){
+    box.innerHTML = `<p class="muted" style="margin-bottom:12px">این پنل فعلاً به‌عنوان «نود» قابل‌اتصال نیست. برای اینکه پنل اصلی بتواند این پنل را مدیریت کند، یک توکن بساز.</p>
+      <button class="btn primary" onclick="createNodeToken()"><i class="ti ti-key"></i> ساخت توکن نود</button>`;
+    return;
+  }
+  const tok = NODE_TOKEN.token || '';
+  box.innerHTML = `
+    <div class="grp"><label>آدرس این پنل</label><div class="nd-tokenbox"><input readonly id="ndOrigin" value="${escapeHtml(origin)}"><button class="btn" onclick="nodeCopy(document.getElementById('ndOrigin').value,'آدرس کپی شد ✓')"><i class="ti ti-copy"></i> کپی</button></div></div>
+    <div class="grp" style="margin-top:10px"><label>توکن API نود</label><div class="nd-tokenbox">
+      <input readonly id="ndToken" type="${NODE_TOKEN_SHOWN?'text':'password'}" value="${escapeHtml(tok)}">
+      <button class="btn" onclick="toggleNodeToken()"><i class="ti ${NODE_TOKEN_SHOWN?'ti-eye-off':'ti-eye'}"></i></button>
+      <button class="btn primary" onclick="nodeCopy(NODE_TOKEN.token,'توکن کپی شد ✓')"><i class="ti ti-copy"></i> کپی توکن</button>
+    </div></div>
+    <div class="nd-steps">
+      <div class="nd-step"><b>۱) کپی</b>آدرس و توکن بالا را کپی کن.</div>
+      <div class="nd-step"><b>۲) پنل اصلی</b>در پنل اصلی برو به «نودها» ← «افزودن نود».</div>
+      <div class="nd-step"><b>۳) پیست</b>آدرس و توکن را بچسبان و «تست اتصال» را بزن.</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn sm" onclick="createNodeToken(true)"><i class="ti ti-refresh"></i> ساخت مجدد (توکن قبلی باطل می‌شود)</button>
+      <button class="btn sm danger" onclick="disableNodeToken()"><i class="ti ti-lock"></i> غیرفعال‌سازی</button>
+    </div>
+    <p class="hint" style="margin-top:10px">این توکن فقط به بخش‌های عملیاتی (اینباند، پراکسی، ساب، آمار) دسترسی می‌دهد؛ رمز، ادمین‌ها و تنظیمات را باز نمی‌کند. مثل رمز نگهش دار.${NODE_TOKEN.created_at?` · ساخته‌شده: ${escapeHtml(String(NODE_TOKEN.created_at).slice(0,16).replace('T',' '))}`:''}</p>`;
+}
+function toggleNodeToken(){ NODE_TOKEN_SHOWN = !NODE_TOKEN_SHOWN; renderNodeToken(); }
+async function createNodeToken(regen){
+  if(regen && !confirm('توکن قبلی همین الان باطل می‌شود و پنل‌های اصلی که با آن وصل‌اند قطع می‌شوند. ادامه بدهم؟')) return;
+  try{ NODE_TOKEN = await api('/api/node/token', {method:'POST'}); NODE_TOKEN_SHOWN = true; renderNodeToken(); toast(regen ? 'توکن جدید ساخته شد ✓' : 'توکن ساخته شد ✓'); }
+  catch(e){ toast(e.message, false); }
+}
+async function disableNodeToken(){
+  if(!confirm('با غیرفعال‌سازی، هیچ پنل اصلی‌ای دیگر به این پنل دسترسی ندارد. ادامه بدهم؟')) return;
+  try{ NODE_TOKEN = await api('/api/node/token', {method:'DELETE'}); NODE_TOKEN_SHOWN = false; renderNodeToken(); toast('توکن نود غیرفعال شد'); }
+  catch(e){ toast(e.message, false); }
+}
+
+// ───────────── لیست نودها (وقتی این پنل اصلی است) ─────────────
+async function loadNodesPage(){
+  loadNodeToken();
+  await loadNodes();
+  clearInterval(NODES_TIMER);
+  NODES_TIMER = setInterval(()=>{ if(CURRENT_PAGE==='nodes') loadNodes(); else clearInterval(NODES_TIMER); }, 30000);
+}
+async function loadNodes(){
+  try{ const r = await api('/api/nodes'); NODES_LIST = r.nodes || []; }
+  catch(e){ NODES_LIST = []; const el = document.getElementById('nodesList'); if(el) el.innerHTML = `<div class="notice danger-note">${escapeHtml(e.message)}</div>`; return; }
+  renderNodes(); updateNodeSwitchBtn();
+}
+function nodeMetricsHtml(s){
+  if(!s || !s.online) return '';
+  const m = (label, val)=>`<div class="nd-m"><small>${label}</small><b>${val}</b></div>`;
+  return `<div class="nd-metrics">
+    ${m('پینگ', Math.round(s.latency_ms||0)+'ms')}
+    ${m('اینباند', s.inbounds ?? 0)}
+    ${m('کلاینت', s.clients ?? 0)}
+    ${m('اتصال فعال', s.connections ?? 0)}
+    ${m('ترافیک', fmtBytes(s.total_bytes||0))}
+    ${s.cpu!=null?m('CPU', Math.round(s.cpu)+'%'):''}
+    ${s.mem!=null?m('RAM', Math.round(s.mem)+'%'):''}
+    ${m('آپتایم', fmtUptime(s.uptime_seconds))}
+  </div>`;
+}
+function renderNodes(){
+  const el = document.getElementById('nodesList'); if(!el) return;
+  if(!NODES_LIST.length){ el.innerHTML = '<div class="muted" style="padding:14px">هنوز نودی اضافه نشده. روی «افزودن نود» بزن و آدرس + توکن پنل دیگر را بچسبان.</div>'; return; }
+  el.innerHTML = NODES_LIST.map(n=>{
+    const s = n.status || null;
+    const state = !n.enabled ? '' : (s ? (s.online ? 'on' : 'off') : '');
+    const label = !n.enabled ? 'غیرفعال' : (s ? (s.online ? 'آنلاین' : 'آفلاین') : 'در حال بررسی');
+    const active = ACTIVE_NODE && ACTIVE_NODE.id === n.id;
+    return `<div class="nd-row">
+      <div class="nd-main">
+        <b><span class="nd-dot ${state}"></span>${escapeHtml(n.name)} <span class="badge ${s&&s.online&&n.enabled?'green':(n.enabled&&s?'red':'gray')}">${label}</span>${active?' <span class="badge gray">در حال مدیریت</span>':''}</b>
+        <small class="mono" style="direction:ltr;text-align:left">${escapeHtml(n.url)} · توکن ${escapeHtml(n.token_hint||'')}${s&&s.version?` · v${escapeHtml(s.version)}`:''}</small>
+        ${s && !s.online && s.error ? `<small class="nd-err">${escapeHtml(s.error)}</small>`:''}
+        ${nodeMetricsHtml(s)}
+      </div>
+      <div class="nd-acts">
+        <button class="btn primary sm" onclick="manageNode('${n.id}')" ${(!n.enabled||!(s&&s.online))?'disabled':''}><i class="ti ti-server-cog"></i> مدیریت</button>
+        <button class="btn sm" onclick="checkNodeNow('${n.id}')"><i class="ti ti-activity"></i> بررسی</button>
+        <button class="btn sm" onclick="openNodeDrawer('${n.id}')"><i class="ti ti-pencil"></i></button>
+        <button class="btn sm" onclick="toggleNodeEnabled('${n.id}')" title="${n.enabled?'غیرفعال‌سازی':'فعال‌سازی'}"><i class="ti ${n.enabled?'ti-player-pause':'ti-player-play'}"></i></button>
+        <button class="btn sm danger" onclick="deleteNode('${n.id}')"><i class="ti ti-trash"></i></button>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function checkAllNodes(){
+  try{ const r = await api('/api/nodes/check-all', {method:'POST'}); NODES_LIST = r.nodes||[]; renderNodes(); updateNodeSwitchBtn(); toast('وضعیت نودها به‌روز شد ✓'); }
+  catch(e){ toast(e.message, false); }
+}
+async function checkNodeNow(id){
+  try{ const r = await api(`/api/nodes/${id}/check`, {method:'POST'}); NODES_LIST = NODES_LIST.map(n=>n.id===id?r.node:n); renderNodes(); updateNodeSwitchBtn(); }
+  catch(e){ toast(e.message, false); }
+}
+async function toggleNodeEnabled(id){
+  const n = NODES_LIST.find(x=>x.id===id); if(!n) return;
+  try{ await api('/api/nodes', {method:'POST', body: JSON.stringify({id, name:n.name, url:n.url, enabled:!n.enabled})}); await loadNodes(); }
+  catch(e){ toast(e.message, false); }
+}
+async function deleteNode(id){
+  const n = NODES_LIST.find(x=>x.id===id); if(!n) return;
+  if(!confirm(`نود «${n.name}» از این پنل حذف شود؟ (خودِ سرور نود و کانفیگ‌هایش دست‌نخورده می‌مانند.)`)) return;
+  try{
+    await api(`/api/nodes/${id}`, {method:'DELETE'});
+    if(ACTIVE_NODE && ACTIVE_NODE.id===id){ exitNodeMode(); return; }
+    await loadNodes(); toast('نود حذف شد');
+  }catch(e){ toast(e.message, false); }
+}
+
+// ───────────── افزودن / ویرایش نود ─────────────
+function openNodeDrawer(id){
+  const n = id ? NODES_LIST.find(x=>x.id===id) : null;
+  openDrawer(n ? 'ویرایش نود' : 'افزودن نود', `
+    <div class="grp"><label>نام نود</label><input id="ndName" value="${escapeHtml(n?n.name:'')}" placeholder="مثلاً: آلمان-۱"></div>
+    <div class="grp"><label>آدرس پنل نود</label><input id="ndUrl" class="mono" style="direction:ltr;text-align:left" value="${escapeHtml(n?n.url:'')}" placeholder="https://your-node.up.railway.app" oninput="ndUrlWarn()"><div class="hint" id="ndUrlHint"></div></div>
+    <div class="grp"><label>توکن API نود</label><input id="ndTok" type="password" class="mono" style="direction:ltr;text-align:left" placeholder="${n?'خالی = بدون تغییر ('+escapeHtml(n.token_hint||'')+')':'vwn_...'}" autocomplete="off"><div class="hint">از پنل نود: تب «نودها» ← «ساخت توکن نود» ← کپی.</div></div>
+    <div id="ndTestResult"></div>
+  `, `<button class="btn" onclick="testNodeForm('${id||''}')"><i class="ti ti-plug-connected"></i> تست اتصال</button>
+      <button class="btn primary" style="flex:1" id="ndSave" onclick="saveNode('${id||''}')"><i class="ti ti-device-floppy"></i> ذخیره</button>`);
+  ndUrlWarn();
+}
+function ndUrlWarn(){
+  const v = (document.getElementById('ndUrl')?.value||'').trim().toLowerCase(); const h = document.getElementById('ndUrlHint'); if(!h) return;
+  h.innerHTML = v.startsWith('http://') ? '<span class="nd-err">⚠️ با http توکن بدون رمزنگاری می‌رود؛ اگر نود روی اینترنت است حتماً https بگذار.</span>' : '';
+}
+function ndFormBody(id){
+  return {id: id||undefined, name: (document.getElementById('ndName')?.value||'').trim(), url: (document.getElementById('ndUrl')?.value||'').trim(), token: (document.getElementById('ndTok')?.value||'').trim()};
+}
+async function testNodeForm(id){
+  const box = document.getElementById('ndTestResult'); if(box) box.innerHTML = '<div class="ob-note">در حال تست اتصال...</div>';
+  try{
+    const r = (await api('/api/nodes/test', {method:'POST', body: JSON.stringify(ndFormBody(id))})).status;
+    box.innerHTML = r.online
+      ? `<div class="ob-note ok"><i class="ti ti-circle-check"></i> اتصال موفق · پینگ ${Math.round(r.latency_ms)}ms · نسخه ${escapeHtml(r.version||'?')} · ${r.inbounds??0} اینباند</div>`
+      : `<div class="ob-note"><i class="ti ti-alert-triangle"></i> <span class="nd-err">${escapeHtml(r.error||'اتصال ناموفق')}</span></div>`;
+  }catch(e){ box.innerHTML = `<div class="ob-note"><span class="nd-err">${escapeHtml(e.message)}</span></div>`; }
+}
+async function saveNode(id){
+  const btn = document.getElementById('ndSave'); if(btn) btn.disabled = true;
+  try{
+    const r = await api('/api/nodes', {method:'POST', body: JSON.stringify(ndFormBody(id))});
+    closeDrawer(); await loadNodes();
+    const s = r.node.status;
+    toast(s && s.online ? 'نود اضافه شد و آنلاین است ✓' : 'نود ذخیره شد ولی آنلاین نیست: ' + ((s&&s.error)||''), !!(s&&s.online));
+  }catch(e){ toast(e.message, false); if(btn) btn.disabled = false; }
+}
+
+// ───────────── مدیریت نود: کل پنل روی نود اجرا می‌شود ─────────────
+function manageNode(id){
+  const n = NODES_LIST.find(x=>x.id===id); if(!n) return;
+  sessionStorage.setItem('vw_active_node', JSON.stringify({id:n.id, name:n.name, url:n.url}));
+  location.reload();
+}
+function exitNodeMode(){
+  sessionStorage.removeItem('vw_active_node');
+  location.reload();
+}
+function initNodeMode(){
+  if(!ACTIVE_NODE) return;
+  ['admins','settings','nodes'].forEach(pg=>{ const t = document.querySelector(`.tab[data-pg="${pg}"]`); if(t) t.style.display='none'; });
+  const b = document.getElementById('nodeBanner');
+  if(b){
+    b.style.display = 'flex';
+    b.innerHTML = `<i class="ti ti-server-cog"></i><span>در حال مدیریت نود <b>${escapeHtml(ACTIVE_NODE.name)}</b> <span class="mono" style="direction:ltr;display:inline-block">${escapeHtml(ACTIVE_NODE.url)}</span> — همه‌ی تغییرات روی سرور آن نود اعمال می‌شود.</span><button class="btn sm" onclick="exitNodeMode()"><i class="ti ti-arrow-back-up"></i> بازگشت به این پنل</button>`;
+  }
+}
+function updateNodeSwitchBtn(){
+  const btn = document.getElementById('nodeSwitchBtn'); if(!btn) return;
+  if(!ACTIVE_NODE && !NODES_LIST.length){ btn.style.display = 'none'; return; }
+  btn.style.display = '';
+  btn.classList.toggle('remote', !!ACTIVE_NODE);
+  btn.innerHTML = `<i class="ti ${ACTIVE_NODE?'ti-server-cog':'ti-home'}"></i> ${ACTIVE_NODE?escapeHtml(ACTIVE_NODE.name):'این پنل'} <i class="ti ti-chevron-down"></i>`;
+}
+async function initNodeUi(){
+  nodeStyle(); initNodeMode();
+  try{ const r = await api('/api/nodes'); NODES_LIST = r.nodes||[]; }catch(e){ NODES_LIST = []; }
+  updateNodeSwitchBtn();
+}
+function openNodeSwitcher(){
+  ensureObStyle();
+  const cur = ACTIVE_NODE ? ACTIVE_NODE.id : '';
+  const rows = [`<label class="ob-row ${cur===''?'on':''}"><input type="radio" name="ndSw" value="" ${cur===''?'checked':''}><span class="ob-emoji">🏠</span><span class="ob-txt"><b>این پنل</b><small>پنل محلی (سرور فعلی)</small></span></label>`]
+    .concat(NODES_LIST.map(n=>{
+      const s = n.status, ok = n.enabled && s && s.online;
+      return `<label class="ob-row ${cur===n.id?'on':''}" style="${ok?'':'opacity:.55'}"><input type="radio" name="ndSw" value="${n.id}" ${cur===n.id?'checked':''} ${ok?'':'disabled'}><span class="nd-dot ${ok?'on':(n.enabled?'off':'')}"></span><span class="ob-txt"><b>${escapeHtml(n.name)}</b><small>${ok?Math.round(s.latency_ms||0)+'ms · '+(s.inbounds??0)+' اینباند':(n.enabled?'آفلاین':'غیرفعال')}</small></span></label>`;
+    })).join('');
+  const ov = document.createElement('div'); ov.className = 'ob-ov';
+  ov.innerHTML = `<div class="ob-box"><h3>انتخاب پنل برای مدیریت</h3><p>با انتخاب یک نود، تمام صفحات (اینباند، ساب، پراکسی، آمار) روی همان نود کار می‌کنند.</p><div class="ob-list ob-picker">${rows}</div>
+    <div class="ob-foot"><button class="btn" data-a="cancel">انصراف</button><button class="btn" data-a="nodes"><i class="ti ti-server-cog"></i> صفحه‌ی نودها</button><button class="btn primary" data-a="ok"><i class="ti ti-check"></i> برو</button></div></div>`;
+  const close = ()=>{ document.removeEventListener('keydown', onKey); ov.remove(); };
+  const onKey = e=>{ if(e.key==='Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  ov.addEventListener('click', e=>{
+    if(e.target===ov) return close();
+    const a = e.target.closest('[data-a]'); if(!a) return;
+    if(a.dataset.a==='cancel') return close();
+    if(a.dataset.a==='nodes'){ close(); if(ACTIVE_NODE){ sessionStorage.removeItem('vw_active_node'); location.reload(); } else gotoPage('nodes'); return; }
+    const v = (ov.querySelector('input[name=ndSw]:checked')||{}).value || '';
+    close();
+    if(v==='') { if(ACTIVE_NODE) exitNodeMode(); } else manageNode(v);
+  });
+  document.body.appendChild(ov);
+}
+
 async function boot(){
   try{
     const me = await api('/api/me');
@@ -1526,8 +1811,10 @@ async function boot(){
       if(!(me.admin.permissions||[]).includes('clients')){
         document.querySelector('.tab[data-pg="clientmgr"]').style.display='none';
       }
+      const nt = document.querySelector('.tab[data-pg="nodes"]'); if(nt) nt.style.display='none';
     } else {
       loadAdminRequests();
+      initNodeUi();
     }
   }catch(e){ location.href='/login'; return; }
   try{ const p = await api('/api/protocols'); PROTOCOLS = p.protocols||[]; MANUAL_META = p.manual||{}; }catch(e){}
@@ -1546,7 +1833,7 @@ async function refreshOverview(){
     $('nb-links').textContent = LINKS.filter(x=>!x.is_client).length;
     $('trafficTotalVal').textContent = fmtBytes(stats.total_traffic_bytes || 0);
   }catch(e){ toast(e.message, false); }
-  try{
+  if(!ACTIVE_NODE) try{
     const s = await api('/api/settings');
     $('ovBaseUrl').textContent = s.public_base_url || s.effective_host || '—';
     const running = !!s.bot_running;
