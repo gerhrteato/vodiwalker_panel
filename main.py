@@ -3626,8 +3626,136 @@ async def create_link_api(
 
 
 # ============================================================
-# AUTO CREATE
+# WS + XHTTP COMBO SUBSCRIPTION  ·  OUTBOUND (EXIT) CONTROL
 # ============================================================
+#
+# «کامبو» = یک گروه ساب (یک لینک اشتراک) که برای هر «خروجی» انتخاب‌شده دقیقاً
+# دو اینباند دارد: یک VLESS-WS و یک VLESS-XHTTP. خروجی یعنی مسیر خروج ترافیک:
+#   ""        -> مستقیم از خود Railway
+#   "<id>"    -> از یک پراکسی SOCKS5 (outbound_proxy.py)
+# با یک خروجی: اشتراک دقیقاً ۲ خط دارد (۱ WS + ۱ XHTTP).
+# با N خروجی : اشتراک ۲×N خط دارد و اسم هر خط با کد کشورش تفکیک می‌شود.
+
+COMBO_MEMBERS = (("vless-ws", "ws"), ("xhttp-packet-up", "xhttp"))
+MAX_COMBO_EXITS = 20
+MAX_BULK_LINKS = 500
+
+
+def normalize_exit_ids(body: dict) -> list[str]:
+    """لیست یکتا و اعتبارسنجی‌شده‌ی خروجی‌ها از بدنه‌ی درخواست.
+    هم `outbound_proxy_ids: [...]` و هم `outbound_proxy_id: "..."` قبول می‌شود."""
+    raw = body.get("outbound_proxy_ids")
+    if raw is None:
+        raw = [body.get("outbound_proxy_id") or ""]
+    elif not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="لیست خروجی‌ها معتبر نیست")
+    exits: list[str] = []
+    for item in raw:
+        pid = clean_outbound_proxy_id(item)
+        if pid not in exits:
+            exits.append(pid)
+    if not exits:
+        exits = [""]
+    if len(exits) > MAX_COMBO_EXITS:
+        raise HTTPException(status_code=400, detail=f"حداکثر {MAX_COMBO_EXITS} خروجی همزمان مجاز است")
+    return exits
+
+
+def _exit_tag(info: dict | None, used: dict) -> str:
+    """پسوند کوتاه ASCII برای اسم کانفیگ: de / us / dir (مستقیم)؛ تکراری‌ها de2, de3 ..."""
+    if not info:
+        tag = "dir"
+    else:
+        cc = "".join(ch for ch in str(info.get("country_code") or "").lower() if ch.isascii() and ch.isalnum())
+        tag = cc[:3] or "px"
+    used[tag] = used.get(tag, 0) + 1
+    return tag if used[tag] == 1 else f"{tag}{used[tag]}"
+
+
+async def create_combo_subscription(
+    request: Request,
+    *,
+    exits: list[str],
+    port: int,
+    label: str = "",
+    group_name: str = "",
+    limit_bytes: int = 0,
+    expires_at: str | None = None,
+    ip_limit: int = 0,
+    connection_limit: int = 0,
+    speed_limit_bytes: int = 0,
+    fingerprint: str = DEFAULT_FINGERPRINT,
+    fragment: str = "off",
+    note: str = "",
+    category_id: str = "0",
+    client_limit: int = 0,
+    config_count: int = 1,
+    clean_ips=None,
+    alarm_enabled: bool = False,
+    security_profile: str = "balanced",
+) -> dict:
+    """یک گروه ساب می‌سازد و برای هر خروجی یک WS + یک XHTTP داخلش می‌گذارد."""
+    host = get_host(request)
+    base = sanitize_config_name(label) if str(label or "").strip() else auto_config_name()
+    infos = {pid: outbound_info(pid) for pid in exits}
+
+    def _flag_country(info):
+        return f"{info.get('flag') or ''} {info.get('country') or info.get('name') or ''}".strip()
+
+    desc = "WS + XHTTP · خروجی: " + " ، ".join(_flag_country(infos[p]) if infos[p] else "مستقیم" for p in exits)
+    sub_id, sub = await create_sub_group(name=(group_name or base)[:60], desc=desc[:200])
+
+    used_tags: dict = {}
+    multi = len(exits) > 1
+    rows: list[dict] = []
+    items: list[dict] = []
+
+    for pid in exits:
+        tag = _exit_tag(infos[pid], used_tags) if multi else ""
+        row = {"outbound_proxy_id": pid, "outbound": infos[pid], "tag": tag}
+        for protocol, suffix in COMBO_MEMBERS:
+            uid, link = await make_link(
+                label=f"{base}{tag}{suffix}",
+                limit_bytes=limit_bytes,
+                expires_at=expires_at,
+                note=note,
+                sub_id=sub_id,
+                protocol=protocol,
+                fingerprint=fingerprint,
+                alpn=DEFAULT_ALPN_BY_PROTOCOL.get(protocol, ""),
+                port=port,
+                ip_limit=ip_limit,
+                speed_limit_bytes=speed_limit_bytes,
+                connection_limit=connection_limit,
+                fragment=fragment,
+                clean_ips=clean_ips,
+                alarm_enabled=alarm_enabled,
+                category_id=category_id,
+                config_count=config_count,
+                outbound_proxy_id=pid,
+            )
+            async with LINKS_LOCK:
+                LINKS[uid]["combo_group_id"] = sub_id
+                LINKS[uid]["client_limit"] = client_limit
+                LINKS[uid]["security_profile"] = security_profile
+            row[suffix] = uid
+            items.append(get_link_info(LINKS[uid], uid, host))
+        rows.append(row)
+
+    await save_state()
+    sub_url = f"{get_scheme()}://{host}/sub-group/{sub['uuid_key']}"
+    public_url = f"{get_scheme()}://{host}/p/{sub['uuid_key']}"
+    where = "، ".join(infos[p]["name"] if infos[p] else "مستقیم" for p in exits)
+    log_activity("link", f"اشتراک WS+XHTTP روی پورت {port} ساخته شد (خروجی: {where})", "ok")
+    return {
+        "ok": True, "combo": True,
+        "combo_group_id": sub_id, "sub_id": sub_id,
+        "sub_url": sub_url, "public_url": public_url, "sub_name": sub.get("name", base),
+        "exits": rows,
+        "outbound": infos[exits[0]] if len(exits) == 1 else None,   # سازگاری با UI قدیمی
+        "items": items,
+    }
+
 
 @app.post("/api/links/auto")
 async def create_auto_link(
@@ -3638,7 +3766,8 @@ async def create_auto_link(
         body = await request.json()
     except Exception:
         body = {}
-    if not isinstance(body, dict): body = {}
+    if not isinstance(body, dict):
+        body = {}
     host = get_host(request)
     profile = str(body.get("profile", "balanced")).strip().lower()
     profiles = {
@@ -3649,51 +3778,134 @@ async def create_auto_link(
     }
     cfg = profiles.get(profile, profiles["balanced"])
     port = safe_int(body.get("port", 443), minimum=MIN_PORT, maximum=MAX_PORT)
-    outbound_proxy_id = clean_outbound_proxy_id(body.get("outbound_proxy_id"))
-    outbound = outbound_info(outbound_proxy_id)
+    exits = normalize_exit_ids(body)
+    note = f"Auto generated by VodiWalker | profile={profile}"
     combo = bool(body.get("combo")) or str(body.get("protocol", "")).strip().lower() in ("combo", "ws+xhttp", "combo-ws-xhttp")
 
-    async def _make_one(protocol: str, group_id: str | None, label: str, sub_id: str | None = None):
-        proto = normalize_protocol(protocol)
-        uid, link = await make_link(
-            label=label, limit_bytes=0, expires_at=None, sub_id=sub_id,
-            ip_limit=cfg["ip"], speed_limit_bytes=cfg["speed"], connection_limit=cfg["conn"],
-            note=f"Auto generated by VodiWalker | profile={profile}" + (f" | combo={group_id}" if group_id else ""),
-            protocol=proto, fingerprint=cfg["fp"],
-            alpn=DEFAULT_ALPN_BY_PROTOCOL.get(proto, ""), port=port, fragment=cfg["fragment"],
-            outbound_proxy_id=outbound_proxy_id,
-        )
-        link["security_profile"] = profile
-        if group_id:
-            async with LINKS_LOCK:
-                LINKS[uid]["combo_group_id"] = group_id
-        return uid, link
-
     if combo:
-        # هر دو کانفیگ (WS و XHTTP) داخل «یک» گروه ساب می‌رن؛ کاربر فقط یک لینک اشتراک
-        # می‌گیره و توش دقیقاً یک WS + یک XHTTP هست. هر دو روی یک پورت (۴۴۳)، مسیرشون فرق داره.
-        base = auto_config_name()
-        desc = "WS + XHTTP (ساخت سریع)"
-        if outbound:
-            desc += f" · خروجی: {outbound.get('flag') or ''} {outbound.get('country') or outbound.get('name') or ''}".rstrip()
-        sub_id, sub = await create_sub_group(name=base, desc=desc)
-        ws_uid, ws_link = await _make_one("vless-ws", sub_id, f"{base}ws", sub_id)
-        xh_uid, xh_link = await _make_one("xhttp-packet-up", sub_id, f"{base}xhttp", sub_id)
-        items = [get_link_info(ws_link, ws_uid, host), get_link_info(xh_link, xh_uid, host)]
-        sub_url = f"{get_scheme()}://{host}/sub-group/{sub['uuid_key']}"
-        public_url = f"{get_scheme()}://{host}/p/{sub['uuid_key']}"
-        log_activity("link", f"اشتراک ترکیبی WS+XHTTP خودکار روی پورت {port} ساخته شد" + (f" (خروجی: {outbound.get('name')})" if outbound else " (خروجی مستقیم)"), "ok")
-        return {
-            "ok": True, "combo": True, "combo_group_id": sub_id, "sub_id": sub_id,
-            "sub_url": sub_url, "public_url": public_url, "sub_name": sub.get("name", base),
-            "outbound": outbound, "profile": profile, "items": items,
-        }
+        result = await create_combo_subscription(
+            request, exits=exits, port=port, note=note, fingerprint=cfg["fp"], fragment=cfg["fragment"],
+            ip_limit=cfg["ip"], connection_limit=cfg["conn"], speed_limit_bytes=cfg["speed"], security_profile=profile,
+        )
+        result["profile"] = profile
+        return result
 
     protocol = normalize_protocol(body.get("protocol", DEFAULT_PROTOCOL))
-    uid, link = await _make_one(protocol, None, auto_config_name())
-    result = {**get_link_info(link, uid, host), "ok": True, "profile": profile}
+    uid, link = await make_link(
+        label=auto_config_name(), limit_bytes=0, expires_at=None, note=note, protocol=protocol,
+        fingerprint=cfg["fp"], alpn=DEFAULT_ALPN_BY_PROTOCOL.get(protocol, ""), port=port,
+        ip_limit=cfg["ip"], speed_limit_bytes=cfg["speed"], connection_limit=cfg["conn"],
+        fragment=cfg["fragment"], outbound_proxy_id=exits[0],
+    )
+    link["security_profile"] = profile
     log_activity("link", f"کانفیگ خودکار «{link['label']}» با {PROTOCOL_LABELS.get(protocol, protocol)} ساخته شد", "ok")
-    return result
+    return {**get_link_info(link, uid, host), "ok": True, "profile": profile}
+
+
+@app.post("/api/links/combo")
+async def create_combo_api(
+    request: Request,
+    _=Depends(require_auth),
+):
+    """«اینباند جدید» پیش‌فرض: یک اشتراک با ۱ WS + ۱ XHTTP برای هر خروجی انتخاب‌شده."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="اطلاعات ارسال‌شده معتبر نیست.")
+
+    exits = normalize_exit_ids(body)
+
+    limit_value = safe_float(body.get("limit_value", 0))
+    limit_unit = str(body.get("limit_unit", "GB") or "GB").upper()
+    limit_bytes = 0 if limit_value <= 0 else parse_size_to_bytes(limit_value, limit_unit)
+    expires_days = safe_int(body.get("expires_days", 0), minimum=0)
+    speed_value = safe_float(body.get("speed_limit_value", 0))
+    speed_unit = str(body.get("speed_limit_unit", "MBIT") or "MBIT").upper()
+    speed_bytes = 0 if speed_value <= 0 else parse_speed_to_bytes(speed_value, speed_unit)
+    ip_limit = safe_int(body.get("ip_limit", 0), minimum=0)
+    connection_limit = safe_int(body.get("connection_limit", 0), minimum=0)
+    port = safe_int(body.get("port", DEFAULT_PORT), default=DEFAULT_PORT, minimum=MIN_PORT, maximum=MAX_PORT)
+    config_count = safe_int(body.get("config_count", 1), minimum=1, maximum=40)
+    client_limit = safe_int(body.get("client_limit", 0), minimum=0, maximum=1000)
+
+    fingerprint = str(body.get("fingerprint", DEFAULT_FINGERPRINT) or DEFAULT_FINGERPRINT).strip().lower()
+    if fingerprint not in FINGERPRINTS:
+        fingerprint = DEFAULT_FINGERPRINT
+    fragment = str(body.get("fragment", "off") or "off").strip().lower()
+    if fragment not in {"off", "safe", "balanced", "aggressive"}:
+        fragment = "off"
+
+    category_id = str(body.get("category_id") or "0")
+    if category_id not in CATEGORIES:
+        category_id = "0"
+    cat = CATEGORIES.get(category_id) or {}
+    clean_ips = list(cat.get("clean_ips") or [])
+    if cat.get("limit_bytes") and limit_bytes <= 0:
+        limit_bytes = int(cat["limit_bytes"])
+    if cat.get("expires_days") and expires_days <= 0:
+        expires_days = int(cat["expires_days"])
+    if cat.get("connection_limit") and connection_limit <= 0:
+        connection_limit = int(cat["connection_limit"])
+    if cat.get("speed_limit_bytes") and speed_bytes <= 0:
+        speed_bytes = int(cat["speed_limit_bytes"])
+    if cat.get("ip_limit") and ip_limit <= 0:
+        ip_limit = int(cat["ip_limit"])
+    if cat.get("single_user"):
+        ip_limit = ip_limit or 1
+        connection_limit = connection_limit or 1
+    expires_at = (datetime.now() + timedelta(days=expires_days)).isoformat() if expires_days > 0 else None
+
+    label = "" if cat.get("random_name") else str(body.get("label") or "").strip()
+    return await create_combo_subscription(
+        request, exits=exits, port=port, label=label, group_name=label,
+        limit_bytes=limit_bytes, expires_at=expires_at, ip_limit=ip_limit,
+        connection_limit=connection_limit, speed_limit_bytes=speed_bytes,
+        fingerprint=fingerprint, fragment=fragment, note=str(body.get("note") or "")[:500],
+        category_id=category_id, client_limit=client_limit, config_count=config_count,
+        clean_ips=clean_ips, alarm_enabled=bool(body.get("alarm_enabled", False)),
+    )
+
+
+@app.post("/api/links/outbound")
+async def set_links_outbound(
+    request: Request,
+    _=Depends(require_auth),
+):
+    """اعمال (یا تغییر) خروجی روی هر تعداد اینباند. کلاینت‌های هر اینباند هم
+    پیش‌فرض همراهش عوض می‌شوند، چون ریلی خروجی را از UUID خودِ کلاینت می‌خواند.
+    body: {uuids: [...], outbound_proxy_id: "" | "<id>", include_clients: true}"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict) or not isinstance(body.get("uuids"), list) or not body["uuids"]:
+        raise HTTPException(status_code=400, detail="حداقل یک اینباند انتخاب کنید.")
+    if len(body["uuids"]) > MAX_BULK_LINKS:
+        raise HTTPException(status_code=400, detail=f"حداکثر {MAX_BULK_LINKS} مورد در هر بار")
+    pid = clean_outbound_proxy_id(body.get("outbound_proxy_id"))
+    include_clients = bool(body.get("include_clients", True))
+    targets = [str(u) for u in dict.fromkeys(body["uuids"])]
+
+    updated, clients, missing = 0, 0, []
+    async with LINKS_LOCK:
+        for uid in targets:
+            link = LINKS.get(uid)
+            if link is None:
+                missing.append(uid)
+                continue
+            link["outbound_proxy_id"] = pid
+            updated += 1
+            if include_clients:
+                for child in LINKS.values():
+                    if child.get("parent_inbound_id") == uid:
+                        child["outbound_proxy_id"] = pid
+                        clients += 1
+    await save_state()
+    info = outbound_info(pid)
+    log_activity("link", f"خروجی {updated} اینباند و {clients} کلاینت روی «{info['name'] if info else 'مستقیم'}» تنظیم شد", "ok")
+    return {"ok": True, "updated": updated, "clients": clients, "missing": missing, "outbound": info}
 
 
 # ============================================================
@@ -4263,6 +4475,10 @@ async def update_link(
 
         if "outbound_proxy_id" in body:
             link["outbound_proxy_id"] = clean_outbound_proxy_id(body.get("outbound_proxy_id"))
+            # کلاینت‌های این اینباند باید همان خروجی را داشته باشند (ریلی از UUID کلاینت می‌خواند)
+            for _child in LINKS.values():
+                if _child.get("parent_inbound_id") == uid:
+                    _child["outbound_proxy_id"] = link["outbound_proxy_id"]
 
         if "fragment" in body:
 
