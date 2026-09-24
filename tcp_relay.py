@@ -103,6 +103,7 @@ async def _handle_client(reader, writer):
         is_link_allowed, is_ip_allowed, save_state, log_activity, now_ir,
     )
     from speed_limit import throttle
+    from outbound_proxy import open_target_connection
 
     async def check_and_use(uid: str, n: int) -> bool:
         async with LINKS_LOCK:
@@ -151,9 +152,7 @@ async def _handle_client(reader, writer):
         stats["total_requests"] += 1
         connections[conn_id]["bytes"] += len(first_chunk)
 
-        target_reader, target_writer = await asyncio.wait_for(
-            asyncio.open_connection(address, port), timeout=10.0
-        )
+        target_reader, target_writer = await open_target_connection(link, address, port, timeout=10.0)
         sock = target_writer.transport.get_extra_info("socket")
         if sock:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
