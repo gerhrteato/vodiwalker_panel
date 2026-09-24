@@ -34,6 +34,7 @@ from main import (
     save_state,
     get_session_info,
     SESSION_COOKIE,
+    NODE_API_TOKEN_MARK,
 )
 
 PROXIES_FILE = DATA_DIR / "vodiwalker_proxies.json"
@@ -407,6 +408,8 @@ router = APIRouter()
 
 
 async def require_owner(request: Request, token=Depends(require_auth)):
+    if token == NODE_API_TOKEN_MARK:   # پنل اصلی که با توکن نود این پنل را مدیریت می‌کند
+        return token
     info = await get_session_info(request.cookies.get(SESSION_COOKIE))
     if not info or info.get("admin_id") != "owner":
         raise HTTPException(status_code=403, detail="فقط مالک پنل می‌تواند پراکسی‌ها را مدیریت کند.")
