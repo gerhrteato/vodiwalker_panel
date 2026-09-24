@@ -394,23 +394,13 @@ SHADOWSOCKS_METHODS = ("chacha20-ietf-poly1305", "aes-128-gcm", "aes-256-gcm", "
 # جداگانه). سایر ترکیب‌ها (مثل هر چیزی با Reality) فقط لینک/کانفیگ برای استفاده
 # روی یک نود Xray-core واقعی می‌سازند و به همین دلیل در پنل با یک نشان
 # «فقط ساخت لینک» مشخص می‌شوند — این محدودیت صادقانه در UI نشان داده می‌شود.
-#
-# نکته‌ی مهم: این پنل هیچ TLS‌ای خودش ترمینیت نمی‌کنه؛ TLS همیشه توسط لایه‌ی
-# جلویی (Railway / ری‌ورس‌پروکسی خودتان) انجام می‌شه. پس این‌که کدوم ترکیب
-# واقعاً «Live» حساب می‌شه به scheme واقعیِ دیپلوی (get_scheme()) بستگی داره:
-# - وقتی دیپلوی روی https هست (حالت پیش‌فرض/رایج، مثل Railway): فقط ترکیب‌های
-#   TLS واقعاً وصل می‌شن؛ یک کلاینت با security=none تلاش می‌کنه بدون TLS به
-#   پورتی وصل بشه که فقط TLS قبول می‌کنه → هندشیک شکست می‌خوره. پس (ws,none) و
-#   (xhttp,none) این‌جا صادقانه link-only هستن، نه Live.
-# - فقط وقتی خودِ ادمین صراحتاً یک public_base_url با scheme=http تنظیم کرده
-#   باشه (یعنی هیچ TLS‌ای جلوی این برنامه نیست)، برعکسش درسته: none واقعاً کار
-#   می‌کنه ولی tls نه (چون این برنامه خودش گواهی TLS سرو نمی‌کنه).
-# (tcp,none) مستقل از این‌هاست — روی یک پورت TCP خامِ جداگانه (tcp_relay.py)
-# سرو می‌شه، نه پورت وب اصلی، پس همیشه معتبره.
-def manual_live_combos() -> set[tuple[str, str]]:
-    if get_scheme() == "http":
-        return {("ws", "none"), ("xhttp", "none"), ("tcp", "none")}
-    return {("ws", "tls"), ("xhttp", "tls"), ("tcp", "none")}
+MANUAL_LIVE_COMBOS = {
+    ("ws", "tls"),
+    ("ws", "none"),
+    ("xhttp", "tls"),
+    ("xhttp", "none"),
+    ("tcp", "none"),
+}
 
 
 def normalize_protocol(protocol: str | None) -> str:
@@ -1209,7 +1199,7 @@ async def require_auth(
     if info.get("admin_id") != "owner":
         path = request.url.path
         permission = "dashboard"
-        if path.startswith("/api/links") or path.startswith("/api/protocols") or path.startswith("/api/reality"):
+        if path.startswith("/api/links") or path.startswith("/api/protocols") or path.startswith("/api/reality") or path.startswith("/api/proxies"):
             permission = "inbounds"
         elif path.startswith("/api/sub") or path.startswith("/sub"):
             permission = "subscriptions"
@@ -1278,8 +1268,7 @@ def generate_vless_link(
     alpn_value = (alpn or DEFAULT_ALPN_BY_PROTOCOL.get(protocol, "http/1.1")).strip()
     label = quote(str(remark or "VodiWalker"), safe="")
     if protocol == "vless-ws":
-        sec = "tls" if get_scheme() != "http" else "none"
-        q = {"encryption":"none","security":sec,"type":"ws","host":host,"path":f"/ws/{uuid}","sni":host,"fp":fp,"alpn":alpn_value}
+        q = {"encryption":"none","security":"tls","type":"ws","host":host,"path":f"/ws/{uuid}","sni":host,"fp":fp,"alpn":alpn_value}
         return "vless://" + uuid + "@" + host + ":" + str(port_value) + "?" + "&".join(f"{k}={quote(str(v), safe=',/') }" for k,v in q.items()) + "#" + label
     if protocol == "vless-tcp":
         # VLESS خام روی TCP — این روی پورت HTTP اصلی سرو نمی‌شه، بلکه روی یک پورت TCP
@@ -1292,8 +1281,7 @@ def generate_vless_link(
         return "vless://" + uuid + "@" + tcp_host + ":" + str(tcp_port) + "?" + "&".join(f"{k}={quote(str(v), safe=',/') }" for k,v in q.items()) + "#" + label
     if protocol.startswith("xhttp-"):
         mode = protocol.replace("xhttp-", "")
-        sec = "tls" if get_scheme() != "http" else "none"
-        q = {"encryption":"none","security":sec,"type":"xhttp","mode":mode,"host":host,"path":f"/xhttp-siz10/{mode}/{uuid}","sni":host,"fp":fp,"alpn":alpn_value}
+        q = {"encryption":"none","security":"tls","type":"xhttp","mode":mode,"host":host,"path":f"/xhttp-siz10/{mode}/{uuid}","sni":host,"fp":fp,"alpn":alpn_value}
         return "vless://" + uuid + "@" + host + ":" + str(port_value) + "?" + "&".join(f"{k}={quote(str(v), safe=',/') }" for k,v in q.items()) + "#" + label
     if protocol == "vmess-ws":
         raw = {"v":"2","ps":remark,"add":host,"port":port_value,"id":uuid,"aid":0,"scy":"auto","net":"ws","type":"none","host":host,"path":f"/ws/{uuid}","tls":"tls","sni":host,"fp":fp}
@@ -1370,12 +1358,21 @@ def build_manual_uri(
     address = (str(link.get("address") or "")).strip() or host
     default_alpn = "h2,http/1.1" if network == "xhttp" else "http/1.1"
     alpn_value = (str(link.get("alpn") or default_alpn)).strip()
-    path = (str(link.get("path") or "")).strip() or f"/{network}/{uid}"
+    xhttp_mode = normalize_xhttp_mode(link.get("xhttp_mode"))
+    path = (str(link.get("path") or "")).strip()
+    if network == "xhttp":
+        # ریلی فقط روی /xhttp-siz10/{mode}/{uuid}/... جواب می‌ده (mode باید packet-up یا
+        # stream-up باشه، نه auto). مسیر قدیمیِ /xhttp/{uid} هیچ‌وقت وصل نمی‌شد، پس مثل «خالی» حساب می‌شه.
+        if xhttp_mode == "auto":
+            xhttp_mode = "packet-up"
+        if not path or path == f"/xhttp/{uid}":
+            path = f"/xhttp-siz10/{xhttp_mode}/{uid}"
+    elif not path:
+        path = f"/{network}/{uid}"
     host_header = (str(link.get("host_header") or "")).strip() or address
     sni = (str(link.get("sni") or "")).strip() or address
     flow = (str(link.get("flow") or "")).strip()
     grpc_service = (str(link.get("grpc_service_name") or "")).strip() or uid
-    xhttp_mode = normalize_xhttp_mode(link.get("xhttp_mode"))
 
     q: dict[str, str] = {}
     if base_protocol == "vless":
@@ -1408,12 +1405,7 @@ def build_manual_uri(
         q["mode"] = (str(link.get("grpc_mode") or "gun")).strip() or "gun"
     elif network == "xhttp":
         q["type"] = "xhttp"
-        # این پنل یک سرور XHTTP ساده (packet-up/stream-up) پیاده کرده، نه هسته‌ی
-        # کامل Xray-core که بتونه مد "auto" رو واقعاً negotiate کنه. اگر mode
-        # واقعاً "auto" بمونه، کلاینت‌های واقعی معمولاً نمی‌تونن با این سرور وصل
-        # بشن؛ پس به‌صورت خاموش و امن روی "packet-up" (سازگارترین و پایدارترین
-        # مد با این بک‌اند) قفل می‌کنیم تا کانفیگ همیشه واقعاً کار کنه.
-        q["mode"] = "packet-up" if xhttp_mode == "auto" else xhttp_mode
+        q["mode"] = xhttp_mode
         q["path"] = path
         q["host"] = host_header
     else:
@@ -1513,7 +1505,7 @@ def get_link_info(
     manual_live = (
         protocol == "manual"
         and normalize_base_protocol(link.get("base_protocol")) == "vless"
-        and (manual_network, manual_security) in manual_live_combos()
+        and (manual_network, manual_security) in MANUAL_LIVE_COMBOS
         and not (manual_network == "xhttp" and manual_mode == "stream-one")
     )
     if protocol == "manual":
@@ -1566,6 +1558,9 @@ def get_link_info(
         "category_name": str(cat.get("name", "عمومی")),
         "config_count": cfg_count,
         "client_limit": int(link.get("client_limit") or 0),
+        "outbound_proxy_id": str(link.get("outbound_proxy_id") or ""),
+        "outbound": outbound_info(link.get("outbound_proxy_id")),
+        "combo_group_id": link.get("combo_group_id") or "",
         "parent_inbound_id": link.get("parent_inbound_id"),
         "is_client": bool(link.get("parent_inbound_id")),
         "status_color": status_color,
@@ -1945,6 +1940,32 @@ async def ensure_default_link():
 # LINK MANAGEMENT
 # ============================================================
 
+def clean_outbound_proxy_id(value) -> str:
+    """'' = مستقیم (خود Railway). غیرخالی باید شناسه‌ی یک پراکسی موجود باشه."""
+    pid = str(value or "").strip()
+    if not pid:
+        return ""
+    try:
+        from outbound_proxy import get_proxy
+    except Exception:
+        raise HTTPException(status_code=400, detail="ماژول پراکسی خروجی در دسترس نیست")
+    if not get_proxy(pid):
+        raise HTTPException(status_code=400, detail="پراکسی انتخاب‌شده پیدا نشد (شاید حذف شده)")
+    return pid
+
+
+def outbound_info(value):
+    """خلاصه‌ی نام/کشور/پرچم پراکسی خروجی برای نمایش در پنل (None = مستقیم)."""
+    pid = str(value or "").strip()
+    if not pid:
+        return None
+    try:
+        from outbound_proxy import proxy_summary
+        return proxy_summary(pid)
+    except Exception:
+        return None
+
+
 async def make_link(
     label: str = "لینک جدید",
     limit_bytes: int = 0,
@@ -1964,6 +1985,7 @@ async def make_link(
     category_id: str = "0",
     config_count: int = 1,
     manual_fields: dict | None = None,
+    outbound_proxy_id: str = "",
 ):
 
     protocol = normalize_protocol(protocol)
@@ -2071,6 +2093,9 @@ async def make_link(
         "config_count": max(1, min(40, int(config_count or 1))),
         "client_limit": 0,
         "usage_history": [],
+        # مسیر خروجی: خالی = مستقیم از روی Railway. غیرخالی = شناسه‌ی یک پراکسی
+        # SOCKS از outbound_proxy.py که ارتباط با مقصد از طریق اون رد می‌شه.
+        "outbound_proxy_id": str(outbound_proxy_id or "").strip(),
     }
 
     if protocol == "manual":
@@ -3579,6 +3604,7 @@ async def create_link_api(
         category_id=category_id,
         config_count=config_count,
         manual_fields=manual_fields,
+        outbound_proxy_id=clean_outbound_proxy_id(body.get("outbound_proxy_id")),
     )
 
     async with LINKS_LOCK:
@@ -3614,7 +3640,6 @@ async def create_auto_link(
         body = {}
     if not isinstance(body, dict): body = {}
     host = get_host(request)
-    protocol = normalize_protocol(body.get("protocol", DEFAULT_PROTOCOL))
     profile = str(body.get("profile", "balanced")).strip().lower()
     profiles = {
         "normal": {"ip":0,"conn":0,"speed":0,"fp":"chrome","fragment":"off"},
@@ -3623,14 +3648,49 @@ async def create_auto_link(
         "maximum": {"ip":0,"conn":0,"speed":0,"fp":"randomized","fragment":"safe"},
     }
     cfg = profiles.get(profile, profiles["balanced"])
-    uid, link = await make_link(
-        label=auto_config_name(), limit_bytes=0, expires_at=None,
-        ip_limit=cfg["ip"], speed_limit_bytes=cfg["speed"], connection_limit=cfg["conn"],
-        note=f"Auto generated by VodiWalker | profile={profile}",
-        protocol=protocol, fingerprint=cfg["fp"],
-        alpn=DEFAULT_ALPN_BY_PROTOCOL.get(protocol, ""), port=443, fragment=cfg["fragment"],
-    )
-    link["security_profile"] = profile
+    port = safe_int(body.get("port", 443), minimum=MIN_PORT, maximum=MAX_PORT)
+    outbound_proxy_id = clean_outbound_proxy_id(body.get("outbound_proxy_id"))
+    outbound = outbound_info(outbound_proxy_id)
+    combo = bool(body.get("combo")) or str(body.get("protocol", "")).strip().lower() in ("combo", "ws+xhttp", "combo-ws-xhttp")
+
+    async def _make_one(protocol: str, group_id: str | None, label: str, sub_id: str | None = None):
+        proto = normalize_protocol(protocol)
+        uid, link = await make_link(
+            label=label, limit_bytes=0, expires_at=None, sub_id=sub_id,
+            ip_limit=cfg["ip"], speed_limit_bytes=cfg["speed"], connection_limit=cfg["conn"],
+            note=f"Auto generated by VodiWalker | profile={profile}" + (f" | combo={group_id}" if group_id else ""),
+            protocol=proto, fingerprint=cfg["fp"],
+            alpn=DEFAULT_ALPN_BY_PROTOCOL.get(proto, ""), port=port, fragment=cfg["fragment"],
+            outbound_proxy_id=outbound_proxy_id,
+        )
+        link["security_profile"] = profile
+        if group_id:
+            async with LINKS_LOCK:
+                LINKS[uid]["combo_group_id"] = group_id
+        return uid, link
+
+    if combo:
+        # هر دو کانفیگ (WS و XHTTP) داخل «یک» گروه ساب می‌رن؛ کاربر فقط یک لینک اشتراک
+        # می‌گیره و توش دقیقاً یک WS + یک XHTTP هست. هر دو روی یک پورت (۴۴۳)، مسیرشون فرق داره.
+        base = auto_config_name()
+        desc = "WS + XHTTP (ساخت سریع)"
+        if outbound:
+            desc += f" · خروجی: {outbound.get('flag') or ''} {outbound.get('country') or outbound.get('name') or ''}".rstrip()
+        sub_id, sub = await create_sub_group(name=base, desc=desc)
+        ws_uid, ws_link = await _make_one("vless-ws", sub_id, f"{base}ws", sub_id)
+        xh_uid, xh_link = await _make_one("xhttp-packet-up", sub_id, f"{base}xhttp", sub_id)
+        items = [get_link_info(ws_link, ws_uid, host), get_link_info(xh_link, xh_uid, host)]
+        sub_url = f"{get_scheme()}://{host}/sub-group/{sub['uuid_key']}"
+        public_url = f"{get_scheme()}://{host}/p/{sub['uuid_key']}"
+        log_activity("link", f"اشتراک ترکیبی WS+XHTTP خودکار روی پورت {port} ساخته شد" + (f" (خروجی: {outbound.get('name')})" if outbound else " (خروجی مستقیم)"), "ok")
+        return {
+            "ok": True, "combo": True, "combo_group_id": sub_id, "sub_id": sub_id,
+            "sub_url": sub_url, "public_url": public_url, "sub_name": sub.get("name", base),
+            "outbound": outbound, "profile": profile, "items": items,
+        }
+
+    protocol = normalize_protocol(body.get("protocol", DEFAULT_PROTOCOL))
+    uid, link = await _make_one(protocol, None, auto_config_name())
     result = {**get_link_info(link, uid, host), "ok": True, "profile": profile}
     log_activity("link", f"کانفیگ خودکار «{link['label']}» با {PROTOCOL_LABELS.get(protocol, protocol)} ساخته شد", "ok")
     return result
@@ -3642,7 +3702,7 @@ async def create_auto_link(
 
 async def add_client_to_inbound(uid: str, label: str = None, limit_bytes: int = None, expires_days: int = 0,
                                   ip_limit: int = None, speed_limit_bytes: int = None, connection_limit: int = None,
-                                  note: str = None):
+                                  note: str = None, outbound_proxy_id: str | None = None):
     """Core logic to create a real client (child link) under an inbound. Shared by the
     HTTP API and the Telegram bot so both stay in sync."""
     async with LINKS_LOCK:
@@ -3662,7 +3722,9 @@ async def add_client_to_inbound(uid: str, label: str = None, limit_bytes: int = 
         limit_bytes=final_limit_bytes,
         expires_at=expires_at,
         note=str(note or source.get("note") or "")[:500],
-        sub_id=source.get("sub_id"),
+        # اشتراک ترکیبی «ساخت سریع» (یک WS + یک XHTTP) باید همیشه دقیقاً دو خط بمونه؛
+        # پس کلاینتِ اینباندهای اون گروه وارد اون گروه نمی‌شه.
+        sub_id=(None if (source.get("combo_group_id") and source.get("combo_group_id") == source.get("sub_id")) else source.get("sub_id")),
         protocol=source.get("protocol", DEFAULT_PROTOCOL),
         fingerprint=source.get("fingerprint", DEFAULT_FINGERPRINT),
         alpn=source.get("alpn", ""),
@@ -3676,6 +3738,8 @@ async def add_client_to_inbound(uid: str, label: str = None, limit_bytes: int = 
         category_id=str(source.get("category_id") or "0"),
         config_count=1,
         manual_fields={k: source.get(k) for k in ("base_protocol","network","security","address","path","host_header","sni","flow","grpc_service_name","grpc_mode","xhttp_mode","header_type","allow_insecure","reality_public_key","reality_short_id","reality_spider_x","ss_method","ss_password")},
+        # None = مثل اینباند والد؛ "" = مستقیم؛ غیرخالی = همون پراکسی
+        outbound_proxy_id=(str(source.get("outbound_proxy_id") or "") if outbound_proxy_id is None else str(outbound_proxy_id).strip()),
     )
     async with LINKS_LOCK:
         LINKS[child_uid]["parent_inbound_id"] = uid
@@ -3722,6 +3786,7 @@ async def create_inbound_client(uid: str, request: Request, _=Depends(require_au
             speed_limit_bytes=body.get("speed_limit_bytes"),
             connection_limit=body.get("connection_limit"),
             note=body.get("note"),
+            outbound_proxy_id=(clean_outbound_proxy_id(body.get("outbound_proxy_id")) if "outbound_proxy_id" in body else None),
         )
     except ValueError as exc:
         code = 409 if "ظرفیت" in str(exc) else 404
@@ -3770,7 +3835,7 @@ async def api_protocols(request: Request, _=Depends(require_auth)):
             "xhttp_modes": list(XHTTP_MODES),
             "shadowsocks_methods": list(SHADOWSOCKS_METHODS),
             "fingerprints": list(FINGERPRINTS),
-            "live_combos": [["vless", n, s] for n, s in manual_live_combos()],
+            "live_combos": [["vless", n, s] for n, s in MANUAL_LIVE_COMBOS],
         },
     }
 
@@ -4114,13 +4179,6 @@ async def update_link(
         if "config_count" in body:
             link["config_count"] = safe_int(body.get("config_count", 1), minimum=1, maximum=40)
 
-        if "clean_ips" in body:
-            raw_clean = body.get("clean_ips") or body.get("clean_ip") or ""
-            if isinstance(raw_clean, list):
-                link["clean_ips"] = [str(x).strip() for x in raw_clean if str(x).strip()]
-            else:
-                link["clean_ips"] = [x.strip() for x in str(raw_clean).replace(",", "\n").splitlines() if x.strip()]
-
         if "speed_limit_value" in body:
 
             speed_value = safe_float(
@@ -4202,6 +4260,9 @@ async def update_link(
             if "ss_password" in manual_fields:
                 link["ss_password"] = str(manual_fields.get("ss_password") or "").strip()[:255]
             link["protocol_label"] = protocol_display_label(link)
+
+        if "outbound_proxy_id" in body:
+            link["outbound_proxy_id"] = clean_outbound_proxy_id(body.get("outbound_proxy_id"))
 
         if "fragment" in body:
 
@@ -6507,6 +6568,32 @@ except Exception as exc:
 
 
 # ============================================================
+# OUTBOUND PROXY (SOCKS)
+# ============================================================
+
+try:
+
+    from outbound_proxy import (
+        router as outbound_proxy_router
+    )
+
+    app.include_router(
+        outbound_proxy_router
+    )
+
+    logger.info(
+        "Outbound proxy module loaded."
+    )
+
+except Exception as exc:
+
+    logger.warning(
+        "Outbound proxy module unavailable: %s",
+        exc,
+    )
+
+
+# ============================================================
 # TELEGRAM
 # ============================================================
 
@@ -7205,7 +7292,7 @@ async def api_bot_start(token=Depends(require_owner)):
         await telegram_bot.start_bot()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"خطا در روشن کردن ربات: {exc}")
-    log_activity("system", "ربات مدیریت پنل از داخل پنل روشن شد", "ok")
+    log_activity("system", "ربات فروش از داخل پنل روشن شد", "ok")
     return {"ok": True, **_bot_settings_snapshot()}
 
 
@@ -7216,7 +7303,7 @@ async def api_bot_stop(token=Depends(require_owner)):
         await telegram_bot.stop_bot()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"خطا در خاموش کردن ربات: {exc}")
-    log_activity("system", "ربات مدیریت پنل از داخل پنل خاموش شد", "warn")
+    log_activity("system", "ربات فروش از داخل پنل خاموش شد", "warn")
     return {"ok": True, **_bot_settings_snapshot()}
 
 
