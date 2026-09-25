@@ -2520,10 +2520,28 @@ function openOutboundManager(){
     <h3><i class="ti ti-route"></i> اوتباند — پراکسی‌های SOCKS5</h3>
     <p>هر SOCKS5 که اینجا اضافه کنی تست واقعی می‌شود (پینگ از داخل تونل + کشور و پرچم IP خروجی). بعد می‌توانی هر اینباند/کلاینت را روی آن بگذاری.</p>
     <div class="ob-mgr-body">
-      <div class="row2"><div class="grp"><label>نام دلخواه</label><input id="dpxName" placeholder="مثلاً آلمان-۱"></div><div class="grp"><label>Host / آدرس کامل</label><input id="dpxHost" class="mono" style="direction:ltr;text-align:left" placeholder="1.2.3.4  یا  socks5://user:pass@host:1080"></div></div>
-      <div class="row2"><div class="grp"><label>Port</label><input id="dpxPort" class="mono" style="direction:ltr;text-align:left" value="1080"></div><div class="grp"><label>Username (اختیاری)</label><input id="dpxUser" class="mono" style="direction:ltr;text-align:left"></div></div>
-      <div class="row2"><div class="grp"><label>Password (اختیاری)</label><input id="dpxPass" type="password" class="mono" style="direction:ltr;text-align:left"></div><div class="grp" style="display:flex;align-items:flex-end"><button class="btn primary" style="width:100%" onclick="addProxyForm('dpx')"><i class="ti ti-plus"></i> افزودن و تست</button></div></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 10px"><b style="font-size:13px">پراکسی‌های ذخیره‌شده</b><button class="btn sm" onclick="testAllProxies()"><i class="ti ti-activity"></i> تست همه</button></div>
+      <div class="ob-seg" style="margin-bottom:12px">
+        <button type="button" id="obAddSingleBtn" class="on" onclick="setObAddMode('single')"><i class="ti ti-plus"></i> افزودن تکی</button>
+        <button type="button" id="obAddScanBtn" onclick="setObAddMode('scan')"><i class="ti ti-radar-2"></i> اسکن و افزودن گروهی</button>
+      </div>
+      <div id="obAddSingle">
+        <div class="row2"><div class="grp"><label>نام دلخواه</label><input id="dpxName" placeholder="مثلاً آلمان-۱"></div><div class="grp"><label>Host / آدرس کامل</label><input id="dpxHost" class="mono" style="direction:ltr;text-align:left" placeholder="1.2.3.4  یا  socks5://user:pass@host:1080"></div></div>
+        <div class="row2"><div class="grp"><label>Port</label><input id="dpxPort" class="mono" style="direction:ltr;text-align:left" value="1080"></div><div class="grp"><label>Username (اختیاری)</label><input id="dpxUser" class="mono" style="direction:ltr;text-align:left"></div></div>
+        <div class="row2"><div class="grp"><label>Password (اختیاری)</label><input id="dpxPass" type="password" class="mono" style="direction:ltr;text-align:left"></div><div class="grp" style="display:flex;align-items:flex-end"><button class="btn primary" style="width:100%" onclick="addProxyForm('dpx')"><i class="ti ti-plus"></i> افزودن و تست</button></div></div>
+      </div>
+      <div id="obAddScan" style="display:none">
+        <p class="hint" style="margin-top:0">یک لیست از پراکسی‌های خودت (پیست یا لینک لیست سرویس‌دهنده‌ات) بده؛ همه را با تونل واقعی SOCKS5 موازی تست می‌کنیم و کشور/پرچم/پینگ واقعی هرکدام را نشان می‌دهیم. پراکسی رایگان عمومی از اینترنت جمع‌آوری نمی‌کنیم چون معمولاً ناامن یا از قبل فیلترند.</p>
+        <div class="ob-seg" style="margin-bottom:8px">
+          <button type="button" id="scanSrcTextBtn" class="on" onclick="setScanSource('text')"><i class="ti ti-clipboard-text"></i> پیست لیست</button>
+          <button type="button" id="scanSrcUrlBtn" onclick="setScanSource('url')"><i class="ti ti-link"></i> از یک URL</button>
+        </div>
+        <div id="scanTextWrap"><textarea id="scanText" rows="4" class="mono" style="direction:ltr;text-align:left;width:100%;resize:vertical" placeholder="هر خط یک پروکسی — یکی از این فرمت‌ها:&#10;1.2.3.4:1080&#10;1.2.3.4:1080:user:pass&#10;socks5://user:pass@1.2.3.4:1080"></textarea></div>
+        <div id="scanUrlWrap" style="display:none"><input id="scanUrl" class="mono" style="direction:ltr;text-align:left" placeholder="https://provider.com/my-proxy-list.txt"></div>
+        <button class="btn primary sm" style="margin-top:8px" id="scanBtn" onclick="runProxyScan()"><i class="ti ti-radar-2"></i> شروع اسکن</button>
+        <div id="scanResultsWrap" style="margin-top:12px"></div>
+      </div>
+      <div class="divider"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><b style="font-size:13px">پراکسی‌های ذخیره‌شده</b><button class="btn sm" onclick="testAllProxies()"><i class="ti ti-activity"></i> تست همه</button></div>
       <div id="dProxiesListWrap"></div>
     </div>
     <div class="ob-foot"><button class="btn" data-a="close">بستن</button></div></div>`;
@@ -2533,6 +2551,68 @@ function openOutboundManager(){
   ov.addEventListener('click', e=>{ if(e.target===ov || e.target.closest('[data-a="close"]')) close(); });
   document.body.appendChild(ov);
   loadProxies();
+}
+function setObAddMode(mode){
+  document.getElementById('obAddSingleBtn').classList.toggle('on', mode==='single');
+  document.getElementById('obAddScanBtn').classList.toggle('on', mode==='scan');
+  document.getElementById('obAddSingle').style.display = mode==='single' ? '' : 'none';
+  document.getElementById('obAddScan').style.display = mode==='scan' ? '' : 'none';
+}
+function setScanSource(src){
+  document.getElementById('scanSrcTextBtn').classList.toggle('on', src==='text');
+  document.getElementById('scanSrcUrlBtn').classList.toggle('on', src==='url');
+  document.getElementById('scanTextWrap').style.display = src==='text' ? '' : 'none';
+  document.getElementById('scanUrlWrap').style.display = src==='url' ? '' : 'none';
+}
+let SCAN_RESULTS = [];
+async function runProxyScan(){
+  const isUrl = document.getElementById('scanSrcUrlBtn').classList.contains('on');
+  const body = isUrl ? {source:'url', url:(document.getElementById('scanUrl').value||'').trim()} : {source:'text', text: document.getElementById('scanText').value||''};
+  if(isUrl && !body.url){ toast('آدرس لیست را وارد کن', false); return; }
+  if(!isUrl && !body.text.trim()){ toast('لیست پروکسی را پیست کن', false); return; }
+  const btn = document.getElementById('scanBtn'); const wrap = document.getElementById('scanResultsWrap');
+  btn.disabled = true; const oldHtml = btn.innerHTML; btn.innerHTML = '<i class="ti ti-hourglass"></i> در حال اسکن... (ممکن است تا یک دقیقه طول بکشد)';
+  wrap.innerHTML = '<div class="ob-note">در حال تست موازیِ همه‌ی کاندیدها با تونل واقعی SOCKS5...</div>';
+  try{
+    const r = await api('/api/proxies/scan', {method:'POST', body: JSON.stringify(body)});
+    SCAN_RESULTS = r.results || [];
+    renderScanResults(r);
+  }catch(e){ wrap.innerHTML = `<div class="ob-note"><span class="nd-err">${escapeHtml(e.message)}</span></div>`; }
+  finally{ btn.disabled = false; btn.innerHTML = oldHtml; }
+}
+function renderScanResults(r){
+  const wrap = document.getElementById('scanResultsWrap');
+  if(!SCAN_RESULTS.length){ wrap.innerHTML = '<div class="sg-empty">نتیجه‌ای نیست</div>'; return; }
+  const rows = SCAN_RESULTS.map((x,i)=>`
+    <label class="ob-row" style="${x.ok?'':'opacity:.55'}">
+      <input type="checkbox" name="scanPick" value="${i}" ${x.ok?'checked':''} ${x.ok?'':'disabled'}>
+      ${flagHtml(x)}
+      <span class="ob-txt"><b class="mono" style="direction:ltr;text-align:left">${escapeHtml(x.host)}:${x.port}</b><small>${x.ok?escapeHtml(x.country||'کشور نامشخص'):escapeHtml(x.message||'ناموفق')}</small></span>
+      <span class="ob-badge ${x.ok?(x.ping_ms<300?'good':(x.ping_ms<800?'warn':'bad')):'bad'}">${x.ok?Math.round(x.ping_ms)+'ms':'قطع'}</span>
+    </label>`).join('');
+  wrap.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <small>${r.working} از ${r.scanned} سالم بود${r.truncated?' · لیست بلندتر بود؛ فقط بخش اول بررسی شد':''}</small>
+      <button class="btn sm" onclick="toggleAllScanPicks()"><i class="ti ti-checks"></i> انتخاب/لغو همه‌ی سالم‌ها</button>
+    </div>
+    <div class="ob-list sg-picklist">${rows}</div>
+    <button class="btn primary" style="width:100%;margin-top:8px" onclick="addScannedProxies()"><i class="ti ti-plus"></i> افزودن انتخاب‌شده‌ها به لیست پراکسی‌ها</button>`;
+}
+function toggleAllScanPicks(){
+  const boxes = [...document.querySelectorAll('input[name=scanPick]:not(:disabled)')];
+  const allChecked = boxes.length>0 && boxes.every(b=>b.checked);
+  boxes.forEach(b=>{ b.checked = !allChecked; b.closest('.ob-row').classList.toggle('on', b.checked); });
+}
+async function addScannedProxies(){
+  const idxs = [...document.querySelectorAll('input[name=scanPick]:checked')].map(i=>Number(i.value));
+  if(!idxs.length){ toast('حداقل یک پراکسی سالم را انتخاب کن', false); return; }
+  try{
+    const r = await api('/api/proxies/bulk', {method:'POST', body: JSON.stringify({items: idxs.map(i=>SCAN_RESULTS[i])})});
+    toast(`${r.added} پراکسی اضافه شد${r.skipped?` (${r.skipped} مورد تکراری رد شد)`:''} ✓`, r.added>0);
+    await loadProxies();
+    document.getElementById('scanResultsWrap').innerHTML = '';
+    SCAN_RESULTS = [];
+  }catch(e){ toast(e.message, false); }
 }
 
 // ─────────────── اینباند جدید: پیش‌فرض «یک WS + یک XHTTP در یک اشتراک» ───────────────
