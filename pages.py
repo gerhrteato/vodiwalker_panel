@@ -2052,7 +2052,22 @@ async function createClient(uid){
   const parent = LINKS.find(x=>x.uuid===uid) || {};
   const outbound_proxy_id = await askOutboundChoice({title:'ساخت کلاینت', sub:'این کلاینت از کجا خارج شود؟', current: parent.outbound_proxy_id||''});
   if(outbound_proxy_id===null) return;
-  try{await api(`/api/links/${uid}/clients`,{method:'POST',body:JSON.stringify({label,limit_bytes:limit?limit*1024*1024*1024:0,expires_days:days,outbound_proxy_id})});toast('کلاینت واقعی ساخته شد ✓');openClients(uid);loadLinks();}catch(e){toast(e.message,false)}
+  try{
+    const r = await api(`/api/links/${uid}/clients`,{method:'POST',body:JSON.stringify({label,limit_bytes:limit?limit*1024*1024*1024:0,expires_days:days,outbound_proxy_id})});
+    openClients(uid); loadLinks();
+    if(r.combo){ showClientPairResult(r); } else { toast('کلاینت واقعی ساخته شد ✓'); }
+  }catch(e){ toast(e.message,false); }
+}
+function showClientPairResult(r){
+  const subUrl = r.sub_url || '';
+  const qr = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(subUrl);
+  const rows = (r.clients||[]).map(i=>`<div class="ob-item"><b>${escapeHtml(i.label||'')}</b><small>${escapeHtml(protoLabel(i))} · پورت ${i.port||443}</small></div>`).join('');
+  openDrawer('کلاینت WS + XHTTP ساخته شد ✓', `
+    <div class="qr-box"><img src="${qr}"></div>
+    <div class="grp"><label>لینک اشتراک این کاربر (۱ WS + ۱ XHTTP)</label><div class="copy-row"><input readonly value="${escapeHtml(subUrl)}" id="cliPairSubInp"></div></div>
+    <div class="ob-items">${rows}</div>
+    <p class="hint">این اینباند بخشی از یک جفت WS+XHTTP است؛ برای همین به‌جای دو کلاینت جدا، هر دو در یک لینک اشتراک قرار گرفتند.</p>
+  `, `<button class="btn primary" style="width:100%" onclick="copyInput('cliPairSubInp')"><i class="ti ti-copy"></i>کپی لینک اشتراک</button>`);
 }
 async function deleteClient(uid,cid){
   if(!confirm(t('این کلاینت حذف شود؟'))) return;
@@ -2131,9 +2146,9 @@ async function createClientMgr(uid){
   const outbound_proxy_id = await askOutboundChoice({title:'ساخت کلاینت', sub:'این کلاینت از کجا خارج شود؟', current: parent.outbound_proxy_id||''});
   if(outbound_proxy_id===null) return;
   try{
-    await api(`/api/links/${uid}/clients`, {method:'POST', body: JSON.stringify({label, limit_bytes: limit ? limit*1024*1024*1024 : 0, expires_days: days, outbound_proxy_id})});
-    toast('کلاینت واقعی ساخته شد ✓');
+    const r = await api(`/api/links/${uid}/clients`, {method:'POST', body: JSON.stringify({label, limit_bytes: limit ? limit*1024*1024*1024 : 0, expires_days: days, outbound_proxy_id})});
     loadClientManagerClients(uid);
+    if(r.combo){ showClientPairResult(r); } else { toast('کلاینت واقعی ساخته شد ✓'); }
   }catch(e){ toast(e.message, false); }
 }
 async function deleteClientMgr(uid, cid){
@@ -2254,14 +2269,24 @@ async function openAutoLink(){
 function showComboResult(r){
   const subUrl = r.sub_url || '';
   const qr = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(subUrl);
-  const items = r.items || [];
-  const rows = items.map(i=>`<div class="ob-item"><b>${escapeHtml(i.label||'')}</b><small>${escapeHtml(i.protocol_display||i.protocol||'VLESS')} · پورت ${i.port||443}</small></div>`).join('');
+  const byUid = Object.fromEntries((r.items||[]).map(i=>[i.uuid, i]));
+  const exits = (r.exits && r.exits.length) ? r.exits : [{outbound: r.outbound}];
+  const blocks = exits.map(e=>{
+    const ob = e.outbound;
+    const head = ob
+      ? `${flagHtml(ob)} <b>${escapeHtml(ob.country||ob.name||'')}</b> <small>پراکسی «${escapeHtml(ob.name||'')}»</small>`
+      : `<span class="ob-emoji">🚀</span> <b>مستقیم</b> <small>خود Railway</small>`;
+    const rows = [['ws','VLESS · WebSocket'],['xhttp','VLESS · XHTTP']].map(([k,lbl])=>{
+      const i = byUid[e[k]]; return i ? `<div class="ob-item"><b>${escapeHtml(i.label||'')}</b><small>${lbl} · پورت ${i.port||443}</small></div>` : '';
+    }).join('');
+    return `<div class="ob-note ${ob?'ok':''}">${head}</div><div class="ob-items">${rows}</div>`;
+  }).join('');
   openDrawer('اشتراک ساخته شد ✓', `
     <div class="qr-box"><img src="${qr}"></div>
-    <div class="grp"><label>لینک اشتراک (${items.length} کانفیگ)</label><div class="copy-row"><input readonly value="${escapeHtml(subUrl)}" id="comboSubInp"></div></div>
-    <div class="grp"><label>ترکیب</label><div class="ob-note ok"><b>${r.ws_count||0} WS + ${r.xhttp_count||0} XHTTP = ${r.output_count||items.length} کانفیگ</b><br><small>همه داخل یک Subscription واحد هستند.</small></div></div>
-    <div class="ob-items">${rows}</div>
-    <p class="hint">این اشتراک در تب «گروه‌های ساب» هم قابل اتصال به اینباندهای پنل اصلی و نودهای دیگر است.</p>
+    <div class="grp"><label>لینک اشتراک (${(r.items||[]).length} کانفیگ)</label><div class="copy-row"><input readonly value="${escapeHtml(subUrl)}" id="comboSubInp"></div></div>
+    <div class="grp"><label>صفحه‌ی نمایش اشتراک (برای مشتری)</label><div class="copy-row"><input readonly value="${escapeHtml(r.public_url||'')}" id="comboPubInp"></div></div>
+    ${blocks}
+    <p class="hint">همین اشتراک در تب «گروه‌های ساب» هم دیده می‌شود.</p>
   `, `<button class="btn primary" style="width:100%" onclick="copyInput('comboSubInp')"><i class="ti ti-copy"></i>کپی لینک اشتراک</button>`);
 }
 
@@ -2535,7 +2560,7 @@ async function openComboDrawer(){
         <div class="grp"><label>دسته‌بندی</label><select id="cbCategory"><option value="0">بدون دسته</option>${cats}</select></div>
         <div class="grp"><label>Port</label><input id="cbPort" type="number" min="1" max="65535" value="443"></div>
         <div class="grp"><label>Fingerprint</label><select id="cbFingerprint">${fps}</select></div>
-        <div class="grp"><label>تعداد خروجی کل</label><input id="cbOutputCount" type="number" min="2" max="40" step="2" value="2" oninput="updateComboSummary()"><small class="hint">تعداد کل کانفیگ‌های همین یک اشتراک؛ نصف WS و نصف XHTTP. مثال: 4 = 2 WS + 2 XHTTP</small></div>
+        <div class="grp"><label>تعداد کل کانفیگ (WS+XHTTP)</label><input id="cbPairs" type="number" min="2" max="80" step="2" value="2" oninput="updateComboSummary()"><small class="hint">مثلاً 4 یعنی داخل همین اشتراک ۲ تا WS و ۲ تا XHTTP باشد؛ برای هر خروجی جدا اعمال می‌شود.</small></div>
         <div class="grp"><label>حجم (GB)</label><input id="cbLimit" type="number" min="0" placeholder="0 = نامحدود"></div>
         <div class="grp"><label>اعتبار (روز)</label><input id="cbDays" type="number" min="0" placeholder="0 = نامحدود"></div>
         <div class="grp"><label>IP Limit</label><input id="cbIp" type="number" min="0" value="0"></div>
@@ -2551,11 +2576,12 @@ async function openComboDrawer(){
 function updateComboSummary(){
   const el = document.getElementById('cbSummary'); if(!el) return;
   const n = readOutboundPicker(document, 'cbExit').length;
-  const total = Math.max(2, Number($('cbOutputCount')?.value || 2));
-  const valid = Number.isInteger(total) && total % 2 === 0 && total <= 40;
-  el.innerHTML = n && valid
-    ? `<i class="ti ti-info-circle"></i> ${n} مسیر خروجی → <b>یک اشتراک با ${total/2} WS + ${total/2} XHTTP</b> (${total} کانفیگ)`
-    : (!n ? '⚠️ حداقل یک خروجی انتخاب کن' : '⚠️ تعداد کل باید عدد زوج بین 2 تا 40 باشد');
+  const rawCount = Number($('cbPairs')?.value || 2);
+  const pairsPerExit = Math.max(1, Math.ceil(rawCount/2));
+  const totalPairs = n * pairsPerExit;
+  el.innerHTML = n
+    ? `<i class="ti ti-info-circle"></i> ${n} خروجی × ${pairsPerExit*2} کانفیگ → یک اشتراک با <b>${totalPairs} WS + ${totalPairs} XHTTP</b> (${totalPairs*2} کانفیگ)`
+    : '⚠️ حداقل یک خروجی انتخاب کن';
 }
 async function submitCombo(){
   const exits = readOutboundPicker(document, 'cbExit');
@@ -2563,15 +2589,14 @@ async function submitCombo(){
   const port = Number($('cbPort')?.value || 443);
   if(!Number.isInteger(port) || port<1 || port>65535){ toast('پورت باید بین 1 تا 65535 باشد', false); return; }
   const num = id => Math.max(0, Number($(id)?.value || 0));
-  const outputCount = Math.floor(Number($('cbOutputCount')?.value || 2));
-  if(outputCount < 2 || outputCount > 40 || outputCount % 2 !== 0){ toast('تعداد کل خروجی باید زوج و بین 2 تا 40 باشد', false); return; }
   const body = {
     label: ($('cbLabel')?.value||'').trim(), category_id: $('cbCategory')?.value || '0', port,
     fingerprint: $('cbFingerprint')?.value || 'chrome',
     limit_value: num('cbLimit'), limit_unit: 'GB', expires_days: num('cbDays'),
     ip_limit: num('cbIp'), connection_limit: num('cbConn'), client_limit: num('cbClients'),
     speed_limit_value: num('cbSpeed'), speed_limit_unit: 'MBIT',
-    note: ($('cbNote')?.value||'').trim(), outbound_proxy_ids: exits, output_count: outputCount
+    note: ($('cbNote')?.value||'').trim(), outbound_proxy_ids: exits,
+    pairs_count: Math.max(2, Math.ceil(Number($('cbPairs')?.value||2)/2)*2)
   };
   const btn = $('cbSubmit'); if(btn) btn.disabled = true;
   try{
@@ -2878,53 +2903,152 @@ async function deleteCategory(cid){
 // ============================================================
 // SUB GROUPS
 // ============================================================
+// ============================================================
+// SUB GROUPS  ·  اعضای محلی + اعضای «نود» (دقیقاً مثل Nodes در پنل سنایی:
+// یک اینباند این پنل + یک اینباند روی یک پنل دیگر، هر دو در یک اشتراک)
+// ============================================================
+let SUBS_CACHE = [];
 async function loadSubGroups(){
   try{
     const res = await api('/api/subs');
-    const subs = res.subs || [];
-    $('nb-subs').textContent = subs.length;
-    $('subsBody').innerHTML = subs.map(s=>`
-      <tr><td>${escapeHtml(s.name||'—')}</td><td>${s.links_count||0}</td>
+    SUBS_CACHE = res.subs || [];
+    $('nb-subs').textContent = SUBS_CACHE.length;
+    $('subsBody').innerHTML = SUBS_CACHE.map(s=>{
+      const parts = [`${s.local_count||0} محلی`]; if(s.remote_count) parts.push(`${s.remote_count} از نود`);
+      return `<tr><td>${escapeHtml(s.name||'—')}</td><td>${parts.join(' + ')}</td>
       <td class="mono">${escapeHtml(s.sub_url||'')}</td>
-      <td><div class="row-actions"><button class="iconbtn" title="اتصال اینباندهای پنل/نود" onclick="openSubInboundDrawer('${s.sub_id}')"><i class="ti ti-link"></i></button><button class="iconbtn" onclick="deleteSubGroup('${s.sub_id}')"><i class="ti ti-trash" style="color:var(--bad)"></i></button></div></td></tr>
-    `).join('') || `<tr><td colspan="4" class="empty">گروهی وجود ندارد</td></tr>`;
+      <td><div class="row-actions">
+        <button class="iconbtn" title="اعضا" onclick="openSubMembersDrawer('${s.sub_id}')"><i class="ti ti-stack-2"></i></button>
+        <button class="iconbtn" onclick="deleteSubGroup('${s.sub_id}')"><i class="ti ti-trash" style="color:var(--bad)"></i></button>
+      </div></td></tr>`;
+    }).join('') || `<tr><td colspan="4" class="empty">گروهی وجود ندارد</td></tr>`;
   }catch(e){ $('subsBody').innerHTML = `<tr><td colspan="4" class="empty">در دسترس نیست</td></tr>`; }
 }
 function openSubGroupDrawer(){
   openDrawer('گروه ساب جدید', `<div class="grp"><label>نام گروه</label><input id="sgName" placeholder="مثلاً: بسته-VIP"></div>
-  <p class="hint">بعد از ساخت گروه، می‌توانید اینباندهای پنل اصلی و نودهای دیگر را به همین یک Subscription وصل کنید.</p>`,
+  <p class="hint">بعد از ساخت گروه، از دکمه‌ی «اعضا» می‌توانی اینباندهای این پنل و نودهای دیگر را داخلش بگذاری.</p>`,
   `<button class="btn primary" style="flex:1" onclick="submitSubGroup()"><i class="ti ti-device-floppy"></i>ساخت</button>`);
 }
 async function submitSubGroup(){
-  try{ await api('/api/subs', {method:'POST', body: JSON.stringify({name: $('sgName').value})}); toast('ساخته شد'); closeDrawer(); loadSubGroups(); }
+  try{ const r = await api('/api/subs', {method:'POST', body: JSON.stringify({name: $('sgName').value})}); toast('ساخته شد'); closeDrawer(); await loadSubGroups(); openSubMembersDrawer(r.sub_id); }
   catch(e){ toast(e.message, false); }
-}
-async function openSubInboundDrawer(subId){
-  try{
-    const mainLinksReq = fetch('/api/links',{credentials:'same-origin'}).then(async r=>{const d=await r.json();if(!r.ok)throw Error(d.detail||'خطا');return d;}); const [linksRes, nodesRes, attachedRes] = await Promise.all([mainLinksReq, api('/api/nodes'), api(`/api/subs/${subId}/inbounds`)]);
-    const links = (linksRes.links||[]).filter(x=>!x.is_client);
-    const nodes = nodesRes.nodes||[];
-    const attached = new Set((attachedRes.inbounds||[]).map(x=>`${x.node_id}:${x.inbound_id}`));
-    openDrawer('اتصال اینباندها به Subscription', `
-      <p class="hint">اینجا دقیقاً مدل نود/اینباند است: اینباند محلی یا اینباند یک نود دیگر را انتخاب کن؛ همه داخل همین یک Subscription قرار می‌گیرند.</p>
-      <div class="grp"><label>اینباندهای پنل اصلی</label><div id="subLocalInbounds" style="max-height:260px;overflow:auto">${links.map(x=>`<label class="chk"><input type="checkbox" data-sub-node="local" data-sub-inbound="${escapeHtml(x.uuid)}" ${attached.has(`local:${x.uuid}`)?'checked':''}> <span>${escapeHtml(x.label||x.uuid.slice(0,8))} · ${escapeHtml(x.protocol_display||x.protocol||'VLESS')}</span></label>`).join('')||'<div class="muted">اینباندی وجود ندارد</div>'}</div></div>
-      <div class="grp"><label>اینباندهای نودهای دیگر</label><div id="subRemoteNodes">${nodes.filter(n=>n.enabled && n.status && n.status.online).map(n=>`<div class="card" style="padding:10px;margin-bottom:8px"><b>${escapeHtml(n.name)}</b><button class="btn sm" style="float:left" onclick="loadNodeSubInbounds('${n.id}','${subId}')">بارگذاری اینباندها</button><div id="subNode_${n.id}" style="clear:both;margin-top:8px"></div></div>`).join('')||'<div class="muted">نود آنلاین ثبت نشده</div>'}</div></div>
-      <div id="subAttachStatus" class="hint"></div>`, `<button class="btn primary" style="flex:1" onclick="saveSubInboundLinks('${subId}')"><i class="ti ti-link"></i>اتصال به اشتراک</button>`);
-  }catch(e){ toast(e.message,false); }
-}
-async function loadNodeSubInbounds(nodeId, subId){
-  const box=$(`subNode_${nodeId}`); if(!box) return;
-  try{ const r=await api(`/api/nodes/${nodeId}/fwd/api/links`); const attached=(await api(`/api/subs/${subId}/inbounds`)).inbounds||[]; const set=new Set(attached.map(x=>`${x.node_id}:${x.inbound_id}`)); const arr=(r.links||[]).filter(x=>!x.is_client); box.innerHTML=arr.map(x=>`<label class="chk"><input type="checkbox" data-sub-node="${escapeHtml(nodeId)}" data-sub-inbound="${escapeHtml(x.uuid)}" ${set.has(`${nodeId}:${x.uuid}`)?'checked':''}> <span>${escapeHtml(x.label||x.uuid.slice(0,8))} · ${escapeHtml(x.protocol_display||x.protocol||'VLESS')}</span></label>`).join('')||'<div class="muted">اینباندی وجود ندارد</div>'; }catch(e){ box.innerHTML=`<div class="notice danger-note">${escapeHtml(e.message)}</div>`; }
-}
-async function saveSubInboundLinks(subId){
-  const selected=[...document.querySelectorAll('[data-sub-node][data-sub-inbound]:checked')].map(x=>({node_id:x.dataset.subNode,inbound_id:x.dataset.subInbound}));
-  if(!selected.length){ toast('حداقل یک اینباند انتخاب کن',false); return; }
-  try{ const r=await api(`/api/subs/${subId}/inbounds`,{method:'POST',body:JSON.stringify({inbounds:selected})}); toast(`اتصال انجام شد: ${r.added_local||0} محلی + ${r.added_remote||0} نودی ✓`); closeDrawer(); loadSubGroups(); }catch(e){ toast(e.message,false); }
 }
 async function deleteSubGroup(id){
   if(!confirm(t('این گروه حذف شود؟'))) return;
   try{ await api(`/api/subs/${id}`, {method:'DELETE'}); toast('حذف شد'); loadSubGroups(); }
   catch(e){ toast(e.message, false); }
+}
+
+function sgStyle(){
+  if(document.getElementById('sgStyle')) return;
+  const st = document.createElement('style'); st.id = 'sgStyle';
+  st.textContent = `
+  .sg-sec{margin-bottom:16px}
+  .sg-sec-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .sg-sec-head b{font-size:12.5px;color:var(--sub)}
+  .sg-empty{padding:14px;text-align:center;color:var(--sub2);font-size:12px;border:1px dashed var(--line2);border-radius:12px}
+  .sg-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel2);margin-bottom:7px}
+  .sg-row .sg-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .sg-row .sg-txt b{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sg-row .sg-txt small{font-size:11px;color:var(--sub)}
+  .sg-picklist{max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:7px;margin:8px 0}
+  `;
+  document.head.appendChild(st);
+}
+sgStyle();
+
+async function openSubMembersDrawer(subId){
+  ensureObStyle(); sgStyle();
+  let sub = SUBS_CACHE.find(s=>s.sub_id===subId);
+  if(!sub){ await loadSubGroups(); sub = SUBS_CACHE.find(s=>s.sub_id===subId); }
+  if(!sub){ toast('گروه پیدا نشد', false); return; }
+  openDrawer(`اعضای «${escapeHtml(sub.name||'')}»`, subMembersBodyHtml(sub),
+    `<button class="btn" style="flex:1" onclick="copyText('${escapeHtml(sub.sub_url||'')}','لینک اشتراک کپی شد ✓')"><i class="ti ti-copy"></i>کپی لینک اشتراک</button>`);
+}
+function subMembersBodyHtml(sub){
+  const localIds = sub.link_ids || [];
+  const localRows = localIds.map(uid=>{
+    const l = (typeof LINKS!=='undefined' ? LINKS.find(x=>x.uuid===uid) : null);
+    return `<div class="sg-row"><div class="sg-txt"><b>${escapeHtml(l?l.label:uid)}</b><small>${l?escapeHtml(protoLabel(l))+' · این پنل':'این پنل'}</small></div>
+      <button class="btn sm danger" onclick="removeLocalSubMember('${sub.sub_id}','${uid}')"><i class="ti ti-x"></i></button></div>`;
+  }).join('') || '<div class="sg-empty">هنوز اینباندی از این پنل اضافه نشده</div>';
+  const remoteRows = (sub.remote_links||[]).map(e=>`
+    <div class="sg-row"><span class="nd-dot ${e.node_missing?'':(e.active?'on':'off')}"></span><div class="sg-txt">
+      <b>${escapeHtml(e.label||e.uuid)}</b><small>${escapeHtml(e.protocol_display||'')} · نود «${escapeHtml(e.node_name||'')}»${e.last_error?` · <span class="nd-err">${escapeHtml(e.last_error)}</span>`:''}</small></div>
+      <button class="btn sm danger" onclick="removeRemoteSubMember('${sub.sub_id}','${e.id}')"><i class="ti ti-x"></i></button></div>`).join('')
+    || '<div class="sg-empty">هنوز اینباندی از نود دیگر وصل نشده</div>';
+  return `
+    <div class="sg-sec"><div class="sg-sec-head"><b>اینباندهای این پنل (${localIds.length})</b><button class="btn sm" onclick="openAddLocalMember('${sub.sub_id}')"><i class="ti ti-plus"></i> افزودن</button></div>${localRows}</div>
+    <div class="sg-sec"><div class="sg-sec-head"><b>اینباندهای روی نودهای دیگر (${(sub.remote_links||[]).length})</b><div style="display:flex;gap:6px">
+      <button class="btn sm" onclick="refreshRemoteSubMembers('${sub.sub_id}')" title="بروزرسانی از نود"><i class="ti ti-refresh"></i></button>
+      <button class="btn sm" onclick="openAddRemoteMember('${sub.sub_id}')"><i class="ti ti-plus"></i> افزودن از نود</button>
+    </div></div>${remoteRows}</div>
+    <p class="hint">این دقیقاً همان قابلیت «Nodes» است: یک اینباند اینجا + یک اینباند روی یک پنل دیگر، هر دو در یک لینک اشتراک.</p>`;
+}
+async function reopenSubMembers(subId){ await loadSubGroups(); openSubMembersDrawer(subId); }
+
+async function removeLocalSubMember(subId, uid){
+  try{ await api(`/api/subs/${subId}/links`, {method:'POST', body: JSON.stringify({link_id: uid, action:'remove'})}); toast('حذف شد'); reopenSubMembers(subId); }
+  catch(e){ toast(e.message, false); }
+}
+async function removeRemoteSubMember(subId, refId){
+  try{ await api(`/api/subs/${subId}/remote-links/${refId}`, {method:'DELETE'}); toast('حذف شد'); reopenSubMembers(subId); }
+  catch(e){ toast(e.message, false); }
+}
+async function refreshRemoteSubMembers(subId){
+  try{ await api(`/api/subs/${subId}/remote-links/refresh`, {method:'POST'}); toast('وضعیت نودها به‌روز شد ✓'); reopenSubMembers(subId); }
+  catch(e){ toast(e.message, false); }
+}
+
+// ── افزودن اینباند از همین پنل ──
+function openAddLocalMember(subId){
+  const sub = SUBS_CACHE.find(s=>s.sub_id===subId); const already = new Set(sub?.link_ids||[]);
+  const options = (typeof LINKS!=='undefined' ? LINKS : []).filter(l=>!l.is_client && !already.has(l.uuid));
+  const rows = options.map(l=>`<label class="ob-row"><input type="checkbox" name="addLocal" value="${escapeHtml(l.uuid)}"><span class="ob-txt"><b>${escapeHtml(l.label)}</b><small>${escapeHtml(protoLabel(l))} · پورت ${l.port||443}</small></span></label>`).join('')
+    || '<div class="sg-empty">اینباند دیگری در این پنل نیست</div>';
+  openDrawer('افزودن از این پنل', `<div class="ob-list ob-picker sg-picklist">${rows}</div>`,
+    `<button class="btn primary" style="flex:1" id="addLocalBtn" onclick="submitAddLocalMembers('${subId}')" ${options.length?'':'disabled'}><i class="ti ti-plus"></i>افزودن</button>`);
+}
+async function submitAddLocalMembers(subId){
+  const uids = [...document.querySelectorAll('input[name=addLocal]:checked')].map(i=>i.value);
+  if(!uids.length){ toast('حداقل یک اینباند انتخاب کن', false); return; }
+  try{
+    for(const uid of uids){ await api(`/api/subs/${subId}/links`, {method:'POST', body: JSON.stringify({link_id: uid, action:'add'})}); }
+    toast(`${uids.length} اینباند اضافه شد ✓`); reopenSubMembers(subId);
+  }catch(e){ toast(e.message, false); }
+}
+
+// ── افزودن اینباند از یک نود دیگر ──
+async function openAddRemoteMember(subId){
+  await loadNodes();
+  const usable = NODES_LIST.filter(n=>n.enabled && n.status && n.status.online);
+  if(!usable.length){ toast('نودی آنلاین برای انتخاب نیست؛ اول از تب «نودها» یک نود وصل کن', false); openOutboundManager===undefined&&null; if(typeof openNodeSwitcher==='function') gotoPage('nodes'); return; }
+  openDrawer('افزودن از نود — انتخاب نود', usable.map(n=>`<label class="ob-row"><input type="radio" name="pickNode" value="${n.id}"><span class="nd-dot on"></span><span class="ob-txt"><b>${escapeHtml(n.name)}</b><small>${escapeHtml(n.url)}</small></span></label>`).join(''),
+    `<button class="btn primary" style="flex:1" onclick="loadNodeInboundsForAdd('${subId}')"><i class="ti ti-arrow-left"></i>بعدی: انتخاب اینباند</button>`);
+}
+async function loadNodeInboundsForAdd(subId){
+  const nodeId = (document.querySelector('input[name=pickNode]:checked')||{}).value;
+  if(!nodeId){ toast('یک نود انتخاب کن', false); return; }
+  try{
+    const r = await api(`/api/nodes/${nodeId}/inbounds`);
+    const sub = SUBS_CACHE.find(s=>s.sub_id===subId);
+    const already = new Set((sub?.remote_links||[]).filter(e=>e.node_id===nodeId).map(e=>e.uuid));
+    const items = (r.inbounds||[]).filter(i=>!already.has(i.uuid));
+    const rows = items.map(i=>`<label class="ob-row"><input type="checkbox" name="addRemote" value="${escapeHtml(i.uuid)}"><span class="ob-txt"><b>${escapeHtml(i.label)}</b><small>${escapeHtml(i.protocol_display||'')} · پورت ${i.port||443}${i.outbound?` · ${flagHtml(i.outbound)} ${escapeHtml(i.outbound.country||i.outbound.name||'')}`:''}</small></span></label>`).join('')
+      || '<div class="sg-empty">این نود اینباند دیگری برای افزودن ندارد</div>';
+    openDrawer(`افزودن از نود «${escapeHtml(r.node.name)}»`, `<div class="ob-list ob-picker sg-picklist">${rows}</div>`,
+      `<button class="btn primary" style="flex:1" id="addRemoteBtn" onclick="submitAddRemoteMembers('${subId}','${nodeId}')" ${items.length?'':'disabled'}><i class="ti ti-plus"></i>افزودن</button>`);
+  }catch(e){ toast(e.message, false); }
+}
+async function submitAddRemoteMembers(subId, nodeId){
+  const uuids = [...document.querySelectorAll('input[name=addRemote]:checked')].map(i=>i.value);
+  if(!uuids.length){ toast('حداقل یک اینباند انتخاب کن', false); return; }
+  try{
+    const r = await api(`/api/subs/${subId}/remote-links`, {method:'POST', body: JSON.stringify({node_id: nodeId, uuids})});
+    if(r.failed && r.failed.length) toast(`${r.added} اضافه شد، ${r.failed.length} مورد ناموفق: ${r.failed[0].error}`, r.added>0);
+    else toast(`${r.added} اینباند از نود اضافه شد ✓`);
+    reopenSubMembers(subId);
+  }catch(e){ toast(e.message, false); }
 }
 
 // ============================================================
