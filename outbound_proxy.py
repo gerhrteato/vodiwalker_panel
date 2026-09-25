@@ -13,6 +13,7 @@
 #   خارج نشه. اگه ترجیح می‌دی به حالت مستقیم برگرده: OUTBOUND_FALLBACK_DIRECT=1
 # ══════════════════════════════════════════════════════════════════════════════
 import asyncio
+import re
 import json
 import os
 import secrets
@@ -46,6 +47,14 @@ GEOIP_TIMEOUT = 6.0
 TCP_PING_TIMEOUT = 5.0
 PROBE_TIMEOUT = 10.0
 PROBE_HOST = "ip-api.com"   # فقط HTTP ساده؛ از داخل تونل SOCKS صدا زده می‌شه تا IP/کشور «خروجی» معلوم بشه
+
+MAX_PROXIES = 300           # سقف کل پراکسی‌های ذخیره‌شده در این پنل
+SCAN_MAX_CANDIDATES = 60    # حداکثر تعداد کاندید در هر اسکن (برای اینکه درخواست خیلی طول نکشه)
+SCAN_MAX_TEXT_BYTES = 500_000
+SCAN_CONCURRENCY = 20       # چند تا هم‌زمان تست بشه
+SCAN_TCP_TIMEOUT = 3.0      # timeoutهای کوتاه‌تر مخصوص اسکن (تا کل عملیات معطل یکی دو تا کند نمونه)
+SCAN_PROBE_TIMEOUT = 6.0
+SCAN_URL_MAX_BYTES = 2_000_000
 
 FALLBACK_DIRECT = os.environ.get("OUTBOUND_FALLBACK_DIRECT", "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -224,10 +233,10 @@ def _make_socks_proxy(proxy: dict):
     )
 
 
-async def _tcp_ping(host: str, port: int):
+async def _tcp_ping(host: str, port: int, timeout: float = TCP_PING_TIMEOUT):
     started = time.perf_counter()
     try:
-        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=TCP_PING_TIMEOUT)
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
         writer.close()
         try:
             await writer.wait_closed()
@@ -254,13 +263,13 @@ async def _read_http_json(reader) -> dict | None:
     return json.loads(text[a:b + 1])
 
 
-async def _probe_via_socks(proxy: dict) -> dict:
+async def _probe_via_socks(proxy: dict, timeout: float = PROBE_TIMEOUT) -> dict:
     """یک تونل SOCKS5 واقعی به ip-api.com:80 باز می‌کنه.
     connect_ms = زمان دست‌دادن SOCKS5 + اتصال به مقصد «از داخل پراکسی» (پینگ واقعی).
     geo = IP/کشور «خروجی» (چیزی که سایت‌ها می‌بینن)؛ اگه نشد None."""
     px = _make_socks_proxy(proxy)
     started = time.perf_counter()
-    sock = await asyncio.wait_for(px.connect(dest_host=PROBE_HOST, dest_port=80), timeout=PROBE_TIMEOUT)
+    sock = await asyncio.wait_for(px.connect(dest_host=PROBE_HOST, dest_port=80), timeout=timeout)
     connect_ms = round((time.perf_counter() - started) * 1000, 1)
 
     geo = None
@@ -273,7 +282,7 @@ async def _probe_via_socks(proxy: dict) -> dict:
         ).encode()
         writer.write(req)
         await writer.drain()
-        data = await asyncio.wait_for(_read_http_json(reader), timeout=PROBE_TIMEOUT)
+        data = await asyncio.wait_for(_read_http_json(reader), timeout=timeout)
         if data and data.get("status") == "success":
             geo = data
     except Exception as exc:
@@ -311,6 +320,82 @@ async def _geo_lookup_host(host: str) -> dict | None:
         except Exception as exc:
             logger.warning(f"geoip(ipwho) failed for {host}: {exc}")
     return None
+
+
+def parse_proxy_line(line: str):
+    """یک خط ورودی رو به (host, port, username, password) تبدیل می‌کنه.
+    فرمت‌های قبول‌شده: host:port | host:port:user:pass | socks5://user:pass@host:port | host تنها (پورت پیش‌فرض 1080)"""
+    line = line.strip().strip(",;")
+    if not line or line.startswith("#") or line.startswith("//") or any(ch.isspace() for ch in line):
+        return None
+    host, port, username, password = "", 1080, "", ""
+    if "://" in line:
+        u = urlparse(line)
+        if u.scheme.lower() not in ("socks5", "socks5h", "socks4", "socks", ""):
+            return None
+        host = u.hostname or ""
+        port = u.port or port
+        if u.username:
+            username = unquote(u.username)
+        if u.password:
+            password = unquote(u.password)
+    else:
+        parts = line.split(":")
+        if len(parts) == 1:
+            host = parts[0]
+        elif len(parts) == 2:
+            host, p = parts
+            if not p.strip().isdigit():
+                return None
+            port = int(p)
+        elif len(parts) == 4:
+            host, p, username, password = parts
+            if not p.strip().isdigit():
+                return None
+            port = int(p)
+        else:
+            return None
+    host = host.strip()
+    if not host or not (1 <= port <= 65535):
+        return None
+    if not re.match(r"^[A-Za-z0-9](?:[A-Za-z0-9\.\-]{0,253}[A-Za-z0-9])?$", host):
+        return None
+    return host, port, username.strip(), password.strip()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# اسکنر پروکسی — لیستی از کاندیدها رو (پیست‌شده یا از یک URL) موازی تست می‌کنه:
+# TCP واقعی + دست‌دادن SOCKS5 واقعی + کشور/پرچم IP خروجی. هیچ پراکسی‌ای از خودِ
+# اینترنت جمع‌آوری نمی‌شه — کاندیدها همیشه از خود ادمین می‌آیند (پیست یا لینک
+# لیستِ سرویس‌دهنده‌ی خودشون)، چون پراکسی‌های «رایگان عمومی» معمولاً یا از قبل
+# فیلترن یا واسطه‌ی ناشناسی دارن که امنیت ترافیک کاربرهای پنل رو به خطر می‌ندازه.
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def scan_one_candidate(host: str, port: int, username: str, password: str) -> dict:
+    tcp_ok, tcp_ms, message = await _tcp_ping(host, port, timeout=SCAN_TCP_TIMEOUT)
+    ok, ping_ms, geo = False, None, None
+    if tcp_ok:
+        try:
+            probe = await _probe_via_socks({"host": host, "port": port, "username": username, "password": password}, timeout=SCAN_PROBE_TIMEOUT)
+            ok, ping_ms, geo = True, probe["connect_ms"], probe["geo"]
+            message = "اتصال SOCKS5 موفق"
+        except asyncio.TimeoutError:
+            message = "تونل SOCKS5 در زمان تعیین‌شده باز نشد"
+        except Exception as exc:
+            hint = " (نام کاربری/رمز را چک کن)" if "auth" in str(exc).lower() or "password" in str(exc).lower() else ""
+            message = f"دست‌دادن SOCKS5 ناموفق{hint}: {type(exc).__name__}"
+    country, country_code, flag, exit_ip = "", "", "", ""
+    if geo:
+        country = geo.get("country", "") or ""
+        country_code = geo.get("countryCode", "") or ""
+        exit_ip = geo.get("query", "") or ""
+        flag = _flag_from_country_code(country_code) if country_code else "🏳️"
+    return {
+        "host": host, "port": port, "username": username, "password": password,
+        "ok": ok, "ping_ms": ping_ms, "tcp_ms": tcp_ms,
+        "country": country, "country_code": country_code, "flag": flag,
+        "exit_ip": exit_ip, "message": message,
+    }
 
 
 async def test_proxy(proxy_id: str) -> dict:
@@ -446,6 +531,8 @@ async def api_upsert_proxy(request: Request, _=Depends(require_owner)):
     proxy_id = str(body.get("id") or "").strip() or None
     if proxy_id and proxy_id not in PROXIES:
         raise HTTPException(status_code=404, detail="پراکسی پیدا نشد")
+    if not proxy_id and len(PROXIES) >= MAX_PROXIES:
+        raise HTTPException(status_code=400, detail=f"حداکثر {MAX_PROXIES} پراکسی مجاز است")
     record = await upsert_proxy(proxy_id, {
         "name": body.get("name"),
         "host": host,
@@ -476,3 +563,113 @@ async def api_test_proxy(proxy_id: str, _=Depends(require_owner)):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return {"ok": True, "proxy": _public(result)}
+
+
+@router.post("/api/proxies/scan")
+async def api_scan_proxies(request: Request, _=Depends(require_owner)):
+    """یک لیست کاندید (پیست‌شده یا از یک URL) رو موازی تست می‌کنه: TCP واقعی +
+    دست‌دادن SOCKS5 واقعی + کشور/پرچم IP خروجی. چیزی ذخیره نمی‌شه؛ برای ذخیره از
+    /api/proxies/bulk با همون نتیجه‌ها استفاده کن."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="ورودی معتبر نیست")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="ورودی معتبر نیست")
+
+    source = str(body.get("source") or "text").strip().lower()
+    raw_text = str(body.get("text") or "")[:SCAN_MAX_TEXT_BYTES]
+
+    if source == "url":
+        url = str(body.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="آدرس لیست باید با http:// یا https:// شروع بشه")
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                raw_text = r.text[:SCAN_URL_MAX_BYTES]
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=400, detail=f"سرور لیست پاسخ {exc.response.status_code} داد")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"دریافت لیست ناموفق بود: {type(exc).__name__}: {str(exc)[:150]}")
+
+    candidates, seen = [], set()
+    for line in raw_text.replace("\r", "\n").replace(",", "\n").split("\n"):
+        parsed = parse_proxy_line(line)
+        if not parsed:
+            continue
+        key = (parsed[0], parsed[1])
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(parsed)
+        if len(candidates) >= SCAN_MAX_CANDIDATES:
+            break
+    if not candidates:
+        raise HTTPException(status_code=400, detail="هیچ پروکسی معتبری در ورودی پیدا نشد (فرمت: host:port یا host:port:user:pass)")
+
+    sem = asyncio.Semaphore(SCAN_CONCURRENCY)
+
+    async def _bounded(host, port, username, password):
+        async with sem:
+            return await scan_one_candidate(host, port, username, password)
+
+    results = await asyncio.gather(*(_bounded(*c) for c in candidates))
+    results = sorted(results, key=lambda r: (not r["ok"], r["ping_ms"] if r["ping_ms"] is not None else 999999))
+    working = sum(1 for r in results if r["ok"])
+    log_activity("network", f"اسکن پروکسی: {working} از {len(results)} مورد سالم بود", "ok" if working else "warn")
+    return {"ok": True, "scanned": len(results), "working": working, "truncated": len(candidates) >= SCAN_MAX_CANDIDATES, "results": results}
+
+
+@router.post("/api/proxies/bulk")
+async def api_bulk_add_proxies(request: Request, _=Depends(require_owner)):
+    """چند پراکسی رو یک‌جا ذخیره می‌کنه — برای «افزودن انتخاب‌شده‌ها» بعد از اسکن.
+    اگه آیتم همراه نتیجه‌ی تست (ok/ping_ms/...) اومده باشه، همون کش می‌شه (نیازی
+    به تست دوباره نیست)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="ورودی معتبر نیست")
+    items = (body or {}).get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="حداقل یک پراکسی انتخاب کن")
+    if len(items) > 50:
+        raise HTTPException(status_code=400, detail="حداکثر ۵۰ مورد در هر بار")
+    if len(PROXIES) >= MAX_PROXIES:
+        raise HTTPException(status_code=400, detail=f"حداکثر {MAX_PROXIES} پراکسی مجاز است")
+
+    existing = {(p["host"], p["port"]) for p in PROXIES.values()}
+    added, skipped = [], 0
+    for it in items:
+        if not isinstance(it, dict) or len(PROXIES) >= MAX_PROXIES:
+            continue
+        host = str(it.get("host") or "").strip()
+        try:
+            port = max(1, min(65535, int(it.get("port") or 1080)))
+        except (TypeError, ValueError):
+            continue
+        if not host or (host, port) in existing:
+            skipped += 1
+            continue
+        record = await upsert_proxy(None, {
+            "name": str(it.get("name") or it.get("country") or host)[:80],
+            "host": host, "port": port,
+            "username": it.get("username", ""), "password": it.get("password", ""),
+        })
+        if it.get("ok"):
+            record.update({
+                "ping_ms": it.get("ping_ms"), "tcp_ms": it.get("tcp_ms"),
+                "country": str(it.get("country") or ""), "country_code": str(it.get("country_code") or ""),
+                "flag": str(it.get("flag") or ""), "exit_ip": str(it.get("exit_ip") or ""),
+                "tested_at": _now_iso(), "test_ok": True, "test_message": str(it.get("message") or "از اسکن"),
+            })
+            PROXIES[record["id"]] = record
+        existing.add((host, port))
+        added.append(record["id"])
+
+    if added:
+        await save_proxies()
+        msg = f"{len(added)} پراکسی از اسکن اضافه شد" + (f" ({skipped} مورد تکراری رد شد)" if skipped else "")
+        log_activity("network", msg, "ok")
+    return {"ok": True, "added": len(added), "skipped": skipped, "proxies": [_public(PROXIES[i]) for i in added]}
