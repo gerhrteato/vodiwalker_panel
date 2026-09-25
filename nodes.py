@@ -1,5 +1,20 @@
 # nodes.py
-════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# «نودها» — اتصال چند پنل VodiWalker به هم (مثل بخش Nodes در پنل سنایی)
+#
+#  ┌─ نقش «نود» (هر پنل) ──────────────────────────────────────────────────────┐
+#  │ در تب «نودها» یک «توکن API» می‌سازی و کپی می‌کنی. هر کس این توکن رو داشته  │
+#  │ باشه (پنل اصلی) می‌تونه با هدر Authorization: Bearer <token> به بخشِ       │
+#  │ عملیاتی API این پنل (اینباندها، پراکسی‌ها، ساب‌ها، آمار ...) دسترسی بگیره.  │
+#  │ به‌عمد هیچ دسترسی‌ای به ادمین‌ها، رمز، نشست‌ها و تنظیمات نمی‌ده.             │
+#  └──────────────────────────────────────────────────────────────────────────┘
+#  ┌─ نقش «پنل اصلی» ─────────────────────────────────────────────────────────┐
+#  │ آدرس + توکن نود رو ذخیره می‌کنه، هر ۳۰ ثانیه وضعیتش رو می‌سنجه (آنلاین/    │
+#  │ پینگ/نسخه/اینباند/اتصال/ترافیک/CPU/RAM) و با /api/nodes/{id}/fwd/... همون   │
+#  │ APIهای پنل رو روی نود اجرا می‌کنه؛ یعنی پنجره‌ی «مدیریت نود» دقیقاً همون   │
+#  │ پنل معمولیه ولی روی سرور نود کار می‌کنه.                                  │
+#  └──────────────────────────────────────────────────────────────────────────┘
+# ══════════════════════════════════════════════════════════════════════════════
 import asyncio
 import hmac
 import json
@@ -205,6 +220,57 @@ def normalize_url(raw: str) -> str:
     except ValueError:
         raise ValueError("پورت آدرس معتبر نیست")
     return f"{u.scheme}://{host}" + (f":{port}" if port else "")
+
+
+def get_node(node_id: str) -> dict | None:
+    return NODES.get(node_id)
+
+
+class NodeCallError(Exception):
+    """خطای قابل‌نمایش هنگام صدا زدن یک API روی نود (main.py این را به HTTPException تبدیل می‌کند)."""
+
+    def __init__(self, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+async def call_node_json(node_id: str, method: str, path: str, json_body=None, timeout: float | None = None) -> dict:
+    """یک API مجاز را روی نود صدا می‌زند و JSON را برمی‌گرداند. برای استفاده‌ی داخلی
+    main.py (مثل «لینک کردن اینباند یک نود در ساب‌گروه پنل اصلی»)، نه یک روت HTTP."""
+    node = NODES.get(node_id)
+    if not node:
+        raise NodeCallError("نود پیدا نشد", 404)
+    if not node.get("enabled", True):
+        raise NodeCallError(f"نود «{node['name']}» غیرفعال است", 409)
+    target = "/" + path.lstrip("/")
+    if not path_allowed(target):
+        raise NodeCallError("این مسیر روی نود مجاز نیست", 403)
+    body = None
+    headers = _auth_headers(node.get("token", ""))
+    if json_body is not None:
+        body = json.dumps(json_body).encode()
+        headers["Content-Type"] = "application/json"
+    try:
+        r = await _http().request(method, node["url"] + target, content=body, headers=headers, timeout=(timeout or FORWARD_TIMEOUT))
+    except httpx.TimeoutException:
+        raise NodeCallError(f"نود «{node['name']}» در زمان تعیین‌شده جواب نداد", 504)
+    except httpx.HTTPError:
+        raise NodeCallError(f"اتصال به نود «{node['name']}» برقرار نشد", 502)
+    if r.status_code in (401, 403):
+        raise NodeCallError(f"توکن نود «{node['name']}» نامعتبر است", 502)
+    if r.status_code == 404:
+        raise NodeCallError("مورد موردنظر روی نود پیدا نشد (شاید حذف شده باشد)", 404)
+    if r.status_code >= 400:
+        detail = None
+        try:
+            detail = r.json().get("detail")
+        except Exception:
+            pass
+        raise NodeCallError(detail or f"خطای نود (HTTP {r.status_code})", 502)
+    try:
+        return r.json()
+    except Exception:
+        raise NodeCallError("پاسخ نامعتبر از نود", 502)
 
 
 def _public_node(n: dict) -> dict:
@@ -469,6 +535,11 @@ async def api_nodes_delete(node_id: str, _=Depends(require_owner)):
         raise HTTPException(status_code=404, detail="نود پیدا نشد")
     STATUS.pop(node_id, None)
     await _save_nodes()
+    try:
+        from main import mark_node_removed_in_subs
+        await mark_node_removed_in_subs(node_id)
+    except Exception as exc:
+        logger.warning(f"failed to flag orphaned remote sub-links after node removal: {exc}")
     log_activity("network", f"نود «{node.get('name')}» حذف شد", "warn")
     return {"ok": True}
 
