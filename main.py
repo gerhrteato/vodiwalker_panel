@@ -3557,6 +3557,7 @@ async def create_link_api(
         category_id = "0"
     config_count = safe_int(body.get("config_count", 1), minimum=1, maximum=40)
     client_limit = safe_int(body.get("client_limit", 0), minimum=0, maximum=1000)
+    output_count = normalize_combo_output_count(body.get("output_count", 2), 2)
     requested_expires_at = str(body.get("expires_at") or "").strip()
     if requested_expires_at:
         try:
@@ -3651,7 +3652,16 @@ async def create_link_api(
 
 COMBO_MEMBERS = (("vless-ws", "ws"), ("xhttp-packet-up", "xhttp"))
 MAX_COMBO_EXITS = 20
+MAX_COMBO_OUTPUTS = 40
 MAX_BULK_LINKS = 500
+
+
+def normalize_combo_output_count(value, default=2) -> int:
+    """تعداد خروجی واقعی اشتراک کامبو؛ خروجی‌ها نصف WS و نصف XHTTP هستند."""
+    count = safe_int(value, default=default, minimum=2, maximum=MAX_COMBO_OUTPUTS)
+    if count % 2:
+        raise HTTPException(status_code=400, detail="تعداد خروجی WS + XHTTP باید زوج باشد؛ مثلاً 2، 4، 6 ...")
+    return count
 
 
 def normalize_exit_ids(body: dict) -> list[str]:
@@ -3706,8 +3716,14 @@ async def create_combo_subscription(
     clean_ips=None,
     alarm_enabled: bool = False,
     security_profile: str = "balanced",
+    output_count: int = 2,
 ) -> dict:
-    """یک گروه ساب می‌سازد و برای هر خروجی یک WS + یک XHTTP داخلش می‌گذارد."""
+    """یک اشتراک واحد می‌سازد. output_count یعنی تعداد کل کانفیگ‌ها، نه تعداد خروجی‌ها.
+    مثلاً 4 => دقیقاً 2 WS + 2 XHTTP داخل همان یک subscription.
+    اگر چند outbound انتخاب شده باشد، کانفیگ‌ها به‌صورت round-robin بین آن‌ها پخش می‌شوند
+    و تعداد کانفیگ‌ها دیگر در تعداد outbound ضرب نمی‌شود.
+    """
+    output_count = normalize_combo_output_count(output_count, 2)
     host = get_host(request)
     base = sanitize_config_name(label) if str(label or "").strip() else auto_config_name()
     infos = {pid: outbound_info(pid) for pid in exits}
@@ -3715,57 +3731,83 @@ async def create_combo_subscription(
     def _flag_country(info):
         return f"{info.get('flag') or ''} {info.get('country') or info.get('name') or ''}".strip()
 
-    desc = "WS + XHTTP · خروجی: " + " ، ".join(_flag_country(infos[p]) if infos[p] else "مستقیم" for p in exits)
+    ws_count = output_count // 2
+    xhttp_count = output_count // 2
+    desc = (
+        f"WS × {ws_count} + XHTTP × {xhttp_count} · خروجی: "
+        + " ، ".join(_flag_country(infos[p]) if infos[p] else "مستقیم" for p in exits)
+    )
     sub_id, sub = await create_sub_group(name=(group_name or base)[:60], desc=desc[:200])
 
-    used_tags: dict = {}
-    multi = len(exits) > 1
     rows: list[dict] = []
     items: list[dict] = []
+    created_by_exit: dict[str, list[str]] = {pid: [] for pid in exits}
+    used_tags: dict = {}
+    multi_exit = len(exits) > 1
+
+    # Total output count is global to the subscription. We distribute the
+    # requested configs over selected exits instead of creating WS+XHTTP per exit.
+    jobs: list[tuple[str, str, str]] = []
+    for i in range(ws_count):
+        pid = exits[i % len(exits)]
+        jobs.append((pid, "vless-ws", "ws"))
+    for i in range(xhttp_count):
+        pid = exits[(ws_count + i) % len(exits)]
+        jobs.append((pid, "xhttp-packet-up", "xhttp"))
+
+    for index, (pid, protocol, suffix) in enumerate(jobs, start=1):
+        info = infos[pid]
+        tag = _exit_tag(info, used_tags) if multi_exit else ""
+        label_suffix = f"{tag}" if tag else ""
+        config_label = f"{base}-{suffix}-{index}{('-'+label_suffix) if label_suffix else ''}"
+        uid, link = await make_link(
+            label=config_label,
+            limit_bytes=limit_bytes,
+            expires_at=expires_at,
+            note=note,
+            sub_id=sub_id,
+            protocol=protocol,
+            fingerprint=fingerprint,
+            alpn=DEFAULT_ALPN_BY_PROTOCOL.get(protocol, ""),
+            port=port,
+            ip_limit=ip_limit,
+            speed_limit_bytes=speed_limit_bytes,
+            connection_limit=connection_limit,
+            fragment=fragment,
+            clean_ips=clean_ips,
+            alarm_enabled=alarm_enabled,
+            category_id=category_id,
+            config_count=1,
+            outbound_proxy_id=pid,
+        )
+        async with LINKS_LOCK:
+            LINKS[uid]["combo_group_id"] = sub_id
+            LINKS[uid]["client_limit"] = client_limit
+            LINKS[uid]["security_profile"] = security_profile
+            LINKS[uid]["combo_output_index"] = index
+            LINKS[uid]["combo_output_total"] = output_count
+        created_by_exit[pid].append(uid)
+        items.append(get_link_info(LINKS[uid], uid, host))
 
     for pid in exits:
-        tag = _exit_tag(infos[pid], used_tags) if multi else ""
-        row = {"outbound_proxy_id": pid, "outbound": infos[pid], "tag": tag}
-        for protocol, suffix in COMBO_MEMBERS:
-            uid, link = await make_link(
-                label=f"{base}{tag}{suffix}",
-                limit_bytes=limit_bytes,
-                expires_at=expires_at,
-                note=note,
-                sub_id=sub_id,
-                protocol=protocol,
-                fingerprint=fingerprint,
-                alpn=DEFAULT_ALPN_BY_PROTOCOL.get(protocol, ""),
-                port=port,
-                ip_limit=ip_limit,
-                speed_limit_bytes=speed_limit_bytes,
-                connection_limit=connection_limit,
-                fragment=fragment,
-                clean_ips=clean_ips,
-                alarm_enabled=alarm_enabled,
-                category_id=category_id,
-                config_count=config_count,
-                outbound_proxy_id=pid,
-            )
-            async with LINKS_LOCK:
-                LINKS[uid]["combo_group_id"] = sub_id
-                LINKS[uid]["client_limit"] = client_limit
-                LINKS[uid]["security_profile"] = security_profile
-            row[suffix] = uid
-            items.append(get_link_info(LINKS[uid], uid, host))
-        rows.append(row)
+        rows.append({
+            "outbound_proxy_id": pid,
+            "outbound": infos[pid],
+            "link_ids": created_by_exit.get(pid, []),
+        })
 
     await save_state()
     sub_url = f"{get_scheme()}://{host}/sub-group/{sub['uuid_key']}"
     public_url = f"{get_scheme()}://{host}/p/{sub['uuid_key']}"
     where = "، ".join(infos[p]["name"] if infos[p] else "مستقیم" for p in exits)
-    log_activity("link", f"اشتراک WS+XHTTP روی پورت {port} ساخته شد (خروجی: {where})", "ok")
+    log_activity("link", f"اشتراک واحد WS+XHTTP با {output_count} کانفیگ ساخته شد (WS={ws_count}, XHTTP={xhttp_count}؛ خروجی: {where})", "ok")
     return {
         "ok": True, "combo": True,
         "combo_group_id": sub_id, "sub_id": sub_id,
         "sub_url": sub_url, "public_url": public_url, "sub_name": sub.get("name", base),
+        "output_count": output_count, "ws_count": ws_count, "xhttp_count": xhttp_count,
         "exits": rows,
-        "outbound": infos[exits[0]] if len(exits) == 1 else None,   # سازگاری با UI قدیمی
+        "outbound": infos[exits[0]] if len(exits) == 1 else None,
         "items": items,
     }
 
@@ -3799,6 +3841,7 @@ async def create_auto_link(
         result = await create_combo_subscription(
             request, exits=exits, port=port, note=note, fingerprint=cfg["fp"], fragment=cfg["fragment"],
             ip_limit=cfg["ip"], connection_limit=cfg["conn"], speed_limit_bytes=cfg["speed"], security_profile=profile,
+            output_count=normalize_combo_output_count(body.get("output_count", 2), 2),
         )
         result["profile"] = profile
         return result
@@ -3878,6 +3921,7 @@ async def create_combo_api(
         fingerprint=fingerprint, fragment=fragment, note=str(body.get("note") or "")[:500],
         category_id=category_id, client_limit=client_limit, config_count=config_count,
         clean_ips=clean_ips, alarm_enabled=bool(body.get("alarm_enabled", False)),
+        output_count=output_count,
     )
 
 
@@ -5398,6 +5442,19 @@ async def subscription_all(
             if is_link_allowed(link)
         ]
 
+    # لینک‌های متصل از نودهای دیگر در لحظه از نود خوانده می‌شوند تا UUID/فعال بودن
+    # اینباند در پنل اصلی stale نشود.
+    for remote in list(sub.get("remote_inbounds") or []):
+        try:
+            info = await _fetch_remote_inbound_info(str(remote.get("node_id")), str(remote.get("inbound_id")))
+            if info.get("active", True):
+                lines.append(str(info.get("vless_full") or info.get("vless") or "").strip())
+        except HTTPException as exc:
+            logger.warning("remote subscription inbound unavailable: %s", exc.detail)
+        except Exception as exc:
+            logger.warning("remote subscription inbound error: %s", exc)
+
+    lines = [x for x in lines if x]
     content = (
         base64
         .b64encode(
@@ -5600,6 +5657,7 @@ async def list_subs_api(
             "link_ids",
             [],
         )
+        remote_count = len(sub.get("remote_inbounds") or [])
 
         active_count = sum(
             1
@@ -5640,7 +5698,10 @@ async def list_subs_api(
                     ) is not None,
 
                 "links_count":
-                    len(link_ids),
+                    len(link_ids) + remote_count,
+
+                "local_links_count": len(link_ids),
+                "remote_inbounds_count": remote_count,
 
                 "active_count":
                     active_count,
@@ -6219,6 +6280,35 @@ async def public_sub_data(
             }
         )
 
+    # Remote node inbounds are represented as linked entries. Usage/connection
+    # counters remain local-only here; the actual subscription link is fetched
+    # from the node when /sub-group is requested.
+    for remote in list(sub.get("remote_inbounds") or []):
+        try:
+            info = await _fetch_remote_inbound_info(str(remote.get("node_id")), str(remote.get("inbound_id")))
+            links_out.append({
+                "uuid": str(remote.get("inbound_id")),
+                "label": info.get("label") or info.get("name") or str(remote.get("inbound_id"))[:8],
+                "active": bool(info.get("active", True)),
+                "protocol": info.get("protocol", DEFAULT_PROTOCOL),
+                "used_bytes": int(info.get("used_bytes", 0) or 0),
+                "used_fmt": fmt_bytes(info.get("used_bytes", 0)),
+                "limit_bytes": int(info.get("limit_bytes", 0) or 0),
+                "limit_fmt": "∞" if not info.get("limit_bytes", 0) else fmt_bytes(info.get("limit_bytes", 0)),
+                "expires_at": info.get("expires_at"),
+                "vless_link": info.get("vless_full") or info.get("vless") or "",
+                "sub_url": info.get("sub") or "",
+                "info_url": info.get("info") or "",
+                "connections": int(info.get("connected_ips", 0) or 0),
+                "ip_limit": int(info.get("ip_limit", 0) or 0),
+                "speed_limit_bytes": int(info.get("speed_limit_bytes", 0) or 0),
+                "connection_limit": int(info.get("connection_limit", 0) or 0),
+                "node_id": remote.get("node_id"),
+                "inbound_id": remote.get("inbound_id"),
+            })
+        except Exception as exc:
+            logger.warning("remote public subscription item unavailable: %s", exc)
+
     total_used = sum(
         item["used_bytes"]
         for item in links_out
@@ -6264,6 +6354,133 @@ async def public_sub_data(
     }
 
 
+
+
+async def _fetch_remote_inbound_info(node_id: str, inbound_id: str) -> dict:
+    """اطلاعات یک اینباند روی نود دیگر را برای اتصال به Subscription می‌گیرد."""
+    try:
+        import nodes as nodes_module
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"ماژول نودها در دسترس نیست: {exc}")
+    node = nodes_module.NODES.get(str(node_id))
+    if not node:
+        raise HTTPException(status_code=404, detail="نود پیدا نشد")
+    if not node.get("enabled", True):
+        raise HTTPException(status_code=409, detail="نود غیرفعال است")
+    target = f"{node['url'].rstrip('/')}/api/links/{quote(str(inbound_id), safe='')}/info"
+    try:
+        r = await nodes_module._http().get(target, headers=nodes_module._auth_headers(node.get("token", "")), timeout=nodes_module.FORWARD_TIMEOUT)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail=f"نود «{node.get('name','node')}» پاسخ نداد")
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"اتصال به نود «{node.get('name','node')}» برقرار نشد: {exc}")
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("detail") or r.text
+        except Exception:
+            detail = r.text
+        raise HTTPException(status_code=502, detail=f"اینباند روی نود قابل دریافت نیست: {detail}")
+    data = r.json()
+    if not data.get("vless_full") and not data.get("vless"):
+        raise HTTPException(status_code=400, detail="اینباند انتخاب‌شده لینک قابل اشتراک ندارد")
+    return data
+
+
+@app.get("/api/subs/{sub_id}/inbounds")
+async def list_sub_inbounds(sub_id: str, _=Depends(require_auth)):
+    async with SUBS_LOCK:
+        sub = SUBS.get(sub_id)
+        if not sub:
+            raise HTTPException(status_code=404, detail="sub not found")
+        local_ids = list(sub.get("link_ids") or [])
+        remote_entries = list(sub.get("remote_inbounds") or [])
+    async with LINKS_LOCK:
+        local = [
+            {"node_id": "local", "inbound_id": lid, "label": LINKS[lid].get("label", lid[:8]), "protocol": LINKS[lid].get("protocol", DEFAULT_PROTOCOL)}
+            for lid in local_ids if lid in LINKS
+        ]
+    remote = []
+    for item in remote_entries:
+        remote.append({"node_id": item.get("node_id"), "inbound_id": item.get("inbound_id"), "label": item.get("label", item.get("inbound_id", "")), "protocol": item.get("protocol", "")})
+    return {"ok": True, "sub_id": sub_id, "inbounds": local + remote}
+
+
+@app.post("/api/subs/{sub_id}/inbounds")
+async def attach_sub_inbounds(sub_id: str, request: Request, _=Depends(require_auth)):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON نامعتبر")
+    entries = body.get("inbounds")
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(status_code=400, detail="حداقل یک اینباند انتخاب کنید")
+    if len(entries) > 100:
+        raise HTTPException(status_code=400, detail="حداکثر ۱۰۰ اینباند")
+
+    async with SUBS_LOCK:
+        sub = SUBS.get(sub_id)
+        if not sub:
+            raise HTTPException(status_code=404, detail="sub not found")
+        sub.setdefault("link_ids", [])
+        sub.setdefault("remote_inbounds", [])
+
+    local_ids = []
+    remote_records = []
+    for raw in entries:
+        if not isinstance(raw, dict):
+            continue
+        node_id = str(raw.get("node_id") or "local").strip()
+        inbound_id = str(raw.get("inbound_id") or raw.get("id") or "").strip()
+        if not inbound_id:
+            continue
+        if node_id in {"local", "main", "primary"}:
+            async with LINKS_LOCK:
+                link = LINKS.get(inbound_id)
+                if not link:
+                    raise HTTPException(status_code=404, detail=f"اینباند محلی پیدا نشد: {inbound_id}")
+                local_ids.append(inbound_id)
+        else:
+            info = await _fetch_remote_inbound_info(node_id, inbound_id)
+            remote_records.append({
+                "node_id": node_id,
+                "inbound_id": inbound_id,
+                "label": info.get("label") or info.get("name") or inbound_id[:8],
+                "protocol": info.get("protocol") or DEFAULT_PROTOCOL,
+            })
+
+    async with SUBS_LOCK:
+        sub = SUBS[sub_id]
+        sub["link_ids"] = list(dict.fromkeys([*(sub.get("link_ids") or []), *local_ids]))
+        existing = {(str(x.get("node_id")), str(x.get("inbound_id"))) for x in sub.get("remote_inbounds") or []}
+        for rec in remote_records:
+            key = (rec["node_id"], rec["inbound_id"])
+            if key not in existing:
+                sub["remote_inbounds"].append(rec)
+                existing.add(key)
+    await save_state()
+    return {"ok": True, "sub_id": sub_id, "added_local": len(local_ids), "added_remote": len(remote_records)}
+
+
+@app.delete("/api/subs/{sub_id}/inbounds")
+async def detach_sub_inbound(sub_id: str, request: Request, _=Depends(require_auth)):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON نامعتبر")
+    node_id = str(body.get("node_id") or "local").strip()
+    inbound_id = str(body.get("inbound_id") or "").strip()
+    if not inbound_id:
+        raise HTTPException(status_code=400, detail="inbound_id الزامی است")
+    async with SUBS_LOCK:
+        sub = SUBS.get(sub_id)
+        if not sub:
+            raise HTTPException(status_code=404, detail="sub not found")
+        if node_id in {"local", "main", "primary"}:
+            sub["link_ids"] = [x for x in sub.get("link_ids") or [] if str(x) != inbound_id]
+        else:
+            sub["remote_inbounds"] = [x for x in sub.get("remote_inbounds") or [] if not (str(x.get("node_id")) == node_id and str(x.get("inbound_id")) == inbound_id)]
+    await save_state()
+    return {"ok": True}
 
 
 @app.post("/api/mix-sub")
