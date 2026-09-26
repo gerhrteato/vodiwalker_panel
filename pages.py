@@ -3047,9 +3047,13 @@ async function openSubMembersDrawer(subId){
 }
 function subMembersBodyHtml(sub){
   const localIds = sub.link_ids || [];
-  const localRows = localIds.map(uid=>{
-    const l = (typeof LINKS!=='undefined' ? LINKS.find(x=>x.uuid===uid) : null);
-    return `<div class="sg-row"><div class="sg-txt"><b>${escapeHtml(l?l.label:uid)}</b><small>${l?escapeHtml(protoLabel(l))+' · این پنل':'این پنل'}</small></div>
+  const localLinks = localIds.map(uid => (typeof LINKS!=='undefined' ? LINKS.find(x=>x.uuid===uid) : null));
+  const isCombo = localLinks.some(l => l && l.combo_group_id === sub.sub_id);
+  const usedExits = new Set(localLinks.filter(l => l && l.combo_group_id === sub.sub_id).map(l => l.outbound_proxy_id || ''));
+  const localRows = localIds.map((uid,i)=>{
+    const l = localLinks[i];
+    const obTag = l && l.combo_group_id===sub.sub_id ? (l.outbound ? `${flagHtml(l.outbound)} ${escapeHtml(l.outbound.country||l.outbound.name||'')}` : '<span class="ob-emoji">🚀</span> مستقیم') : '';
+    return `<div class="sg-row">${obTag?`<span style="flex:none">${obTag}</span>`:''}<div class="sg-txt"><b>${escapeHtml(l?l.label:uid)}</b><small>${l?escapeHtml(protoLabel(l))+' · این پنل':'این پنل'}</small></div>
       <button class="btn sm danger" onclick="removeLocalSubMember('${sub.sub_id}','${uid}')"><i class="ti ti-x"></i></button></div>`;
   }).join('') || '<div class="sg-empty">هنوز اینباندی از این پنل اضافه نشده</div>';
   const remoteRows = (sub.remote_links||[]).map(e=>`
@@ -3057,7 +3061,13 @@ function subMembersBodyHtml(sub){
       <b>${escapeHtml(e.label||e.uuid)}</b><small>${escapeHtml(e.protocol_display||'')} · نود «${escapeHtml(e.node_name||'')}»${e.last_error?` · <span class="nd-err">${escapeHtml(e.last_error)}</span>`:''}</small></div>
       <button class="btn sm danger" onclick="removeRemoteSubMember('${sub.sub_id}','${e.id}')"><i class="ti ti-x"></i></button></div>`).join('')
     || '<div class="sg-empty">هنوز اینباندی از نود دیگر وصل نشده</div>';
+  const comboSec = isCombo ? `
+    <div class="sg-sec"><div class="sg-sec-head"><b><i class="ti ti-route"></i> خروجی‌های این اشتراک (WS+XHTTP)</b>
+      <button class="btn sm" onclick="openAddComboExits('${sub.sub_id}')"><i class="ti ti-plus"></i> افزودن خروجی</button></div>
+      <p class="hint" style="margin:0 0 8px">هر پروکسی که تیک بزنی — یا «مستقیم» — یک WS و یک XHTTP تازه با همون تنظیمات به همین اشتراک اضافه می‌شود.</p>
+    </div>` : '';
   return `
+    ${comboSec}
     <div class="sg-sec"><div class="sg-sec-head"><b>اینباندهای این پنل (${localIds.length})</b><button class="btn sm" onclick="openAddLocalMember('${sub.sub_id}')"><i class="ti ti-plus"></i> افزودن</button></div>${localRows}</div>
     <div class="sg-sec"><div class="sg-sec-head"><b>اینباندهای روی نودهای دیگر (${(sub.remote_links||[]).length})</b><div style="display:flex;gap:6px">
       <button class="btn sm" onclick="refreshRemoteSubMembers('${sub.sub_id}')" title="بروزرسانی از نود"><i class="ti ti-refresh"></i></button>
@@ -3066,6 +3076,34 @@ function subMembersBodyHtml(sub){
     <p class="hint">این دقیقاً همان قابلیت «Nodes» است: یک اینباند اینجا + یک اینباند روی یک پنل دیگر، هر دو در یک لینک اشتراک.</p>`;
 }
 async function reopenSubMembers(subId){ await loadSubGroups(); openSubMembersDrawer(subId); }
+
+// ── افزودن خروجی (پروکسی/مستقیم) به یک اشتراک WS+XHTTP از قبل موجود ──
+async function openAddComboExits(subId){
+  await loadProxies();
+  const sub = SUBS_CACHE.find(s=>s.sub_id===subId);
+  const usedExits = new Set((sub?.link_ids||[])
+    .map(uid => (typeof LINKS!=='undefined' ? LINKS.find(x=>x.uuid===uid) : null))
+    .filter(l => l && l.combo_group_id === subId)
+    .map(l => l.outbound_proxy_id || ''));
+  const items = [{id:'', direct:true}, ...PROXIES_CACHE].filter(x=>!usedExits.has(x.id));
+  if(!items.length){ toast('همه‌ی خروجی‌های موجود قبلاً روی این اشتراک هستند', false); return; }
+  const rows = items.map(x=>{
+    if(x.direct) return `<label class="ob-row"><input type="checkbox" name="cbAddExit" value=""><span class="ob-emoji">🚀</span><span class="ob-txt"><b>مستقیم (خود Railway)</b><small>ترافیک از IP سرور Railway خارج می‌شود</small></span></label>`;
+    return `<label class="ob-row"><input type="checkbox" name="cbAddExit" value="${escapeHtml(x.id)}">${flagHtml(x)}<span class="ob-txt"><b>${escapeHtml(x.name)}</b><small>${x.country?escapeHtml(x.country):'کشور نامشخص'}</small></span><span class="ob-badge ${pingClass(x)}">${pingText(x)}</span></label>`;
+  }).join('');
+  openDrawer('افزودن خروجی به این اشتراک', `<p class="hint" style="margin-top:0">هرچقدر پروکسی می‌خواهی تیک بزن؛ اگر «مستقیم» را هم بخواهی علاوه بر پروکسی‌ها، همان بالا را هم تیک بزن.</p><div class="ob-list ob-picker sg-picklist">${rows}</div>`,
+    `<button class="btn primary" style="flex:1" id="addExitBtn" onclick="submitAddComboExits('${subId}')"><i class="ti ti-plus"></i>افزودن</button>`);
+}
+async function submitAddComboExits(subId){
+  const ids = [...document.querySelectorAll('input[name=cbAddExit]:checked')].map(i=>i.value);
+  if(!ids.length){ toast('حداقل یک خروجی تیک بزن', false); return; }
+  try{
+    const r = await api(`/api/subs/${subId}/combo-exits`, {method:'POST', body: JSON.stringify({outbound_proxy_ids: ids})});
+    toast(r.added ? `${r.added} خروجی تازه (${r.added*2} کانفیگ) اضافه شد ✓` : 'همه‌ی این خروجی‌ها قبلاً روی این اشتراک بودند', r.added>0);
+    await loadLinks();
+    reopenSubMembers(subId);
+  }catch(e){ toast(e.message, false); }
+}
 
 async function removeLocalSubMember(subId, uid){
   try{ await api(`/api/subs/${subId}/links`, {method:'POST', body: JSON.stringify({link_id: uid, action:'remove'})}); toast('حذف شد'); reopenSubMembers(subId); }
