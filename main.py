@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import string
 import time
@@ -3786,6 +3787,7 @@ async def create_combo_subscription(
                     # combo_tag یعنی «شریک جفت»: ws و xhttپ همین تگ، تا موقع ساخت
                     # کلاینت بشه جفتشون رو پیدا کرد و توی یک ساب گذاشت (نه دوتا جدا).
                     LINKS[uid]["combo_tag"] = tag
+                    LINKS[uid]["combo_base_label"] = base
                     LINKS[uid]["client_limit"] = client_limit
                     LINKS[uid]["security_profile"] = security_profile
                 row[suffix] = uid
@@ -3805,6 +3807,106 @@ async def create_combo_subscription(
         "outbound": infos[exits[0]] if len(exits) == 1 else None,   # سازگاری با UI قدیمی
         "items": items,
     }
+
+
+async def add_combo_exits(sub_id: str, host: str, new_exits: list[str]) -> dict:
+    """به یک اشتراک WS+XHTTP از قبل موجود، بدون ساخت اشتراک جدید، خروجی‌های تازه
+    اضافه می‌کنه — تنظیمات (پورت، فینگرپرینت، محدودیت‌ها و ...) دقیقاً از روی یکی
+    از جفت‌های موجود همون گروه کپی می‌شه، فقط outbound_proxy_id عوض می‌شه."""
+    async with LINKS_LOCK:
+        existing_pairs = [(uid, dict(l)) for uid, l in LINKS.items() if l.get("combo_group_id") == sub_id]
+    if not existing_pairs:
+        raise ValueError("این گروه یک اشتراک WS+XHTTP نیست (هیچ جفتی در آن پیدا نشد)")
+    template = existing_pairs[0][1]
+    already = {l.get("outbound_proxy_id", "") for _uid, l in existing_pairs}
+
+    to_add, seen = [], set()
+    for raw in new_exits:
+        pid = clean_outbound_proxy_id(raw)
+        if pid in already or pid in seen:
+            continue
+        seen.add(pid)
+        to_add.append(pid)
+    if not to_add:
+        return {"added": 0, "items": [], "skipped_existing": list(new_exits)}
+
+    infos = {pid: outbound_info(pid) for pid in to_add}
+
+    # از تگ‌های موجود میان همین گروه، شمارنده‌ی هر پیشوند (de, us, dir, ...) رو
+    # دوباره می‌سازیم تا خروجی‌های جدید با شماره‌ی درست ادامه پیدا کنن (de -> de2)
+    used_tags: dict = {}
+    for tag in {l.get("combo_tag", "") for _uid, l in existing_pairs if l.get("combo_tag")}:
+        m = re.match(r"^([a-zA-Z]+)(\d*)$", tag)
+        if not m:
+            continue
+        base, num = m.group(1), m.group(2)
+        used_tags[base] = max(used_tags.get(base, 0), int(num) if num else 1)
+    multi = True  # با بیش از یک خروجی در گروه، تگ‌گذاری همیشه لازمه
+
+    rows, items = [], []
+    for pid in to_add:
+        tag = _exit_tag(infos[pid], used_tags)
+        row = {"outbound_proxy_id": pid, "outbound": infos[pid], "tag": tag}
+        for protocol, suffix in COMBO_MEMBERS:
+            uid, link = await make_link(
+                label=f"{template.get('combo_base_label') or sanitize_config_name(template.get('label') or '') or auto_config_name()}{tag}{suffix}",
+                limit_bytes=template.get("limit_bytes", 0),
+                expires_at=template.get("expires_at"),
+                note=template.get("note", ""),
+                sub_id=sub_id,
+                protocol=protocol,
+                fingerprint=template.get("fingerprint", DEFAULT_FINGERPRINT),
+                alpn=DEFAULT_ALPN_BY_PROTOCOL.get(protocol, ""),
+                port=int(template.get("port") or DEFAULT_PORT),
+                ip_limit=template.get("ip_limit", 0),
+                speed_limit_bytes=template.get("speed_limit_bytes", 0),
+                connection_limit=template.get("connection_limit", 0),
+                fragment=template.get("fragment", "off"),
+                clean_ips=list(template.get("clean_ips") or []),
+                alarm_enabled=bool(template.get("alarm_enabled", False)),
+                category_id=template.get("category_id", "0"),
+                config_count=template.get("config_count", 1),
+                outbound_proxy_id=pid,
+            )
+            async with LINKS_LOCK:
+                LINKS[uid]["combo_group_id"] = sub_id
+                LINKS[uid]["combo_tag"] = tag
+                LINKS[uid]["client_limit"] = template.get("client_limit", 0)
+                LINKS[uid]["security_profile"] = template.get("security_profile", "balanced")
+            row[suffix] = uid
+            items.append(get_link_info(LINKS[uid], uid, host))
+        rows.append(row)
+
+    await save_state()
+    where = "، ".join((infos[p]["name"] if infos[p] else "مستقیم") for p in to_add)
+    async with SUBS_LOCK:
+        sub_name = (SUBS.get(sub_id) or {}).get("name", "")
+    log_activity("link", f"{len(to_add)} خروجی تازه (WS+XHTTP) به اشتراک «{sub_name}» اضافه شد: {where}", "ok")
+    return {"added": len(to_add), "exits": rows, "items": items}
+
+
+@app.post("/api/subs/{sub_id}/combo-exits")
+async def api_add_combo_exits(sub_id: str, request: Request, _=Depends(require_auth)):
+    """چک‌باکسی: هر چقدر پروکسی (به‌علاوه‌ی «مستقیم» اگه بخوای) روی این اشتراک بزن —
+    برای هرکدوم که هنوز نداره، یک جفت WS+XHTTP تازه با همون تنظیمات ساخته می‌شه."""
+    async with SUBS_LOCK:
+        if sub_id not in SUBS:
+            raise HTTPException(status_code=404, detail="گروه ساب پیدا نشد")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON نامعتبر است")
+    exits = body.get("outbound_proxy_ids") if isinstance(body, dict) else None
+    if not isinstance(exits, list) or not exits:
+        raise HTTPException(status_code=400, detail="حداقل یک خروجی (پروکسی یا مستقیم) انتخاب کن")
+    if len(exits) > MAX_COMBO_EXITS:
+        raise HTTPException(status_code=400, detail=f"حداکثر {MAX_COMBO_EXITS} خروجی در هر بار")
+    host = get_host(request)
+    try:
+        result = await add_combo_exits(sub_id, host, exits)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **result}
 
 
 @app.post("/api/links/auto")
