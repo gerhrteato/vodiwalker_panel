@@ -1,5 +1,5 @@
-# VodiWalker Shop — مینی‌اپ مشتری + مینی‌اپ ادمین، تست رایگان، پرداخت Stars، دکمه‌های سفارشی
-import asyncio, hashlib, hmac, json, secrets, time
+# VodiWalker Shop v2 — مینی‌اپ مشتری + مینی‌اپ ادمین (فقط تست رایگان، بدون فروش)
+import asyncio, hashlib, hmac, json, re, secrets, time
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -7,20 +7,22 @@ from urllib.parse import parse_qsl
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from main import (app, DATA_DIR, LINKS, make_link, get_host, get_scheme, get_public_base, vless_link_for_link,
-                  parse_size_to_bytes, save_state, bump_daily_stat, get_support_username,
+from main import (app, DATA_DIR, LINKS, LINKS_LOCK, make_link, remove_link, get_host, get_scheme, get_public_base,
+                  vless_link_for_link, parse_size_to_bytes, save_state, bump_daily_stat, get_support_username,
                   DEFAULT_PROTOCOL, LIVE_PROTOCOLS, logger)
-import sales
 
 HERE = Path(__file__).parent
 FILE = DATA_DIR / "vodiwalker_shop.json"
 LOCK = asyncio.Lock()
 DEFAULTS = {
     "brand": "VodiWalker",
+    "theme": {"accent": "#9b5cff", "accent2": "#37d6ff", "mode": "dark", "glass": 60, "radius": 18},
     "trial": {"enabled": True, "gb": 1, "days": 1, "speed_mbps": 0, "ip_limit": 1, "per_user": 1, "channel": ""},
     "texts": {"welcome": "👋 به VodiWalker خوش اومدی!\nاینترنت سریع و پایدار با تحویل آنی.",
-              "trial_ok": "🎁 تست رایگان شما فعال شد!", "paid_ok": "✅ پرداخت موفق بود. سرویس شما آماده است:"},
-    "buttons": [], "users": {}, "trials": {},
+              "trial_ok": "🎁 تست رایگان شما فعال شد!",
+              "announce": "", "guide": "۱) از تب «سرویس‌ها» لینک ساب رو کپی کن.\n۲) در v2rayNG / Streisand / Hiddify گزینه‌ی افزودن از کلیپ‌بورد رو بزن.\n۳) متصل شو و لذت ببر."},
+    "announce_on": False, "maintenance": False,
+    "buttons": [], "users": {}, "trials": {}, "bonus": {}, "admins": [],
 }
 CFG: dict = {}
 
@@ -52,7 +54,7 @@ def _tb():
     return telegram_bot
 
 
-# ── احراز هویت initData (برای همه‌ی کاربران؛ ادمین از روی TELEGRAM_ADMIN_IDS) ──
+# ── احراز هویت initData ──
 def tg_user(request: Request) -> dict:
     token = _tb().BOT_TOKEN
     try:
@@ -68,8 +70,12 @@ def tg_user(request: Request) -> dict:
         raise HTTPException(401, "احراز هویت تلگرام نامعتبر است")
 
 
-def is_admin(uid) -> bool:
+def is_owner(uid) -> bool:
     return int(uid) in _tb().ADMIN_IDS
+
+
+def is_admin(uid) -> bool:
+    return is_owner(uid) or int(uid) in {int(x) for x in CFG["admins"]}
 
 
 def touch_user(u: dict) -> bool:
@@ -93,22 +99,33 @@ def mine(tid):
     return [(u, l) for u, l in LINKS.items() if str(l.get("note", "")).split(":")[:2] == ["tg", str(tid)]]
 
 
+def trial_quota(tid) -> int:
+    t = CFG["trial"]
+    return 0 if not t["per_user"] else int(t["per_user"]) + int(CFG["bonus"].get(str(tid), 0))
+
+
+def trial_used(tid) -> bool:
+    q = trial_quota(tid)
+    return bool(q) and len(CFG["trials"].get(str(tid), [])) >= q
+
+
 # ── تست رایگان ──
-async def make_trial(u: dict) -> dict:
+async def make_trial(u: dict, force=False, gb=None, days=None) -> dict:
     t, tid = CFG["trial"], u["id"]
-    if not t["enabled"]: raise HTTPException(400, "تست رایگان فعلاً غیرفعال است")
-    if CFG["users"].get(str(tid), {}).get("banned"): raise HTTPException(403, "دسترسی شما مسدود است")
-    if t["per_user"] and len(CFG["trials"].get(str(tid), [])) >= int(t["per_user"]):
-        raise HTTPException(400, "شما قبلاً از تست رایگان استفاده کرده‌اید")
-    ch = str(t.get("channel") or "").strip()
-    if ch:
-        r = await _tb()._call("getChatMember", chat_id=ch if ch.startswith("@") else "@" + ch, user_id=tid)
-        if ((r or {}).get("result") or {}).get("status") not in ("member", "administrator", "creator"):
-            raise HTTPException(400, f"ابتدا در کانال {ch} عضو شوید و دوباره تلاش کنید")
+    if not force:
+        if CFG["maintenance"]: raise HTTPException(503, "سرویس موقتاً در حال بروزرسانی است")
+        if not t["enabled"]: raise HTTPException(400, "تست رایگان فعلاً غیرفعال است")
+        if CFG["users"].get(str(tid), {}).get("banned"): raise HTTPException(403, "دسترسی شما مسدود است")
+        if trial_used(tid): raise HTTPException(400, "شما قبلاً از تست رایگان استفاده کرده‌اید")
+        ch = str(t.get("channel") or "").strip()
+        if ch:
+            r = await _tb()._call("getChatMember", chat_id=ch if ch.startswith("@") else "@" + ch, user_id=tid)
+            if ((r or {}).get("result") or {}).get("status") not in ("member", "administrator", "creator"):
+                raise HTTPException(400, f"ابتدا در کانال {ch} عضو شوید و دوباره تلاش کنید")
     uid, link = await make_link(
         label=f"Test-{u.get('username') or tid}",
-        limit_bytes=int(parse_size_to_bytes(float(t["gb"]), "GB")),
-        expires_at=(datetime.now() + timedelta(days=float(t["days"]))).isoformat(),
+        limit_bytes=int(parse_size_to_bytes(float(gb or t["gb"]), "GB")),
+        expires_at=(datetime.now() + timedelta(days=float(days or t["days"]))).isoformat(),
         protocol="vless-ws" if "vless-ws" in LIVE_PROTOCOLS else DEFAULT_PROTOCOL,
         ip_limit=int(t["ip_limit"]), speed_limit_bytes=int(float(t["speed_mbps"]) * 1024 * 1024 / 8),
         note=f"tg:{tid}:trial")
@@ -116,50 +133,7 @@ async def make_trial(u: dict) -> dict:
     return item(uid, link, get_host())
 
 
-# ── پرداخت Stars ──
-def _invoice_args(plan, tid):
-    return dict(title=f"{plan['name']} · {plan['days']} روز",
-                description=f"{plan['volume_gb']:g}GB · {plan['speed_mbps']}Mbps · {plan['ip_limit']} کاربر",
-                payload=sales.create_payload(plan["id"], tid), currency="XTR",
-                prices=[{"label": plan["name"], "amount": int(plan["stars"])}])
-
-
-async def invoice_link(u: dict, plan_id: str) -> str:
-    p = sales.get_plan(plan_id)
-    if not p: raise HTTPException(404, "پلن پیدا نشد")
-    link = ((await _tb()._call("createInvoiceLink", **_invoice_args(p, u["id"]))) or {}).get("result")
-    if not link: raise HTTPException(502, "ساخت فاکتور ناموفق بود")
-    return link
-
-
-async def bot_precheckout(q: dict):
-    ok = False
-    try:
-        _, plan_id, tid, _r = q["invoice_payload"].split("|")
-        ok = bool(sales.get_plan(plan_id)) and int(tid) == q["from"]["id"] and not CFG["users"].get(tid, {}).get("banned")
-    except Exception:
-        pass
-    await _tb()._call("answerPreCheckoutQuery", pre_checkout_query_id=q["id"], ok=ok,
-                      **({} if ok else {"error_message": "پلن نامعتبر است"}))
-
-
-async def bot_paid(msg: dict):
-    sp, frm = msg["successful_payment"], msg["from"]
-    cid = sp.get("telegram_payment_charge_id", "")
-    try:
-        _, plan_id, _t, _r = sp["invoice_payload"].split("|")
-        if any(o.get("telegram_charge_id") == cid for o in sales.SALES["orders"]): return
-        _o, _l, uid, _s = await sales.fulfill_payment(frm, plan_id, cid)
-        LINKS[uid]["note"] = f"tg:{frm['id']}"; await save_state()
-        await send_config(frm["id"], uid, CFG["texts"]["paid_ok"])
-    except Exception as e:
-        logger.warning(f"shop payment error: {e}")
-        await _tb()._send(frm["id"], f"⚠️ پرداخت ثبت شد ولی ساخت سرویس خطا داد. با پشتیبانی تماس بگیر.\nکد: <code>{cid}</code>")
-        for a in _tb().ADMIN_IDS:
-            await _tb()._send(a, f"⚠️ خطای تحویل سفارش کاربر {frm['id']}\nکد: <code>{cid}</code>\n{e}")
-
-
-# ── ربات: منوی مشتری ──
+# ── ربات: فقط منوی تست رایگان ──
 def _base(path):
     b = get_public_base()
     return f"{b}{path}" if b and b.startswith("https://") else None
@@ -167,18 +141,19 @@ def _base(path):
 
 def admin_rows():
     a, s = _base("/tma/admin"), _base("/tma/shop")
-    return ([[{"text": "🛠 مینی‌اپ ادمین", "web_app": {"url": a}}, {"text": "🛍 مینی‌اپ مشتری", "web_app": {"url": s}}]] if a else []) + \
+    return ([[{"text": "🛠 مینی‌اپ ادمین", "web_app": {"url": a}}, {"text": "🚀 مینی‌اپ مشتری", "web_app": {"url": s}}]] if a else []) + \
            [[{"text": "👤 نمای مشتری", "callback_data": "c:menu"}]]
 
 
 def customer_kb(admin=False):
     rows, s = [], _base("/tma/shop")
-    if s: rows.append([{"text": "🚀 مینی‌اپ ما", "web_app": {"url": s}}])
-    r = [{"text": "🛒 خرید اشتراک", "callback_data": "c:plans"}]
-    if CFG["trial"]["enabled"]: r.insert(0, {"text": "🎁 تست رایگان", "callback_data": "c:trial"})
-    rows += [r, [{"text": "📦 سرویس‌های من", "callback_data": "c:my"}]]
+    if s: rows.append([{"text": "🚀 باز کردن VodiWalker", "web_app": {"url": s}}])
+    r = []
+    if CFG["trial"]["enabled"]: r.append({"text": "🎁 تست رایگان", "callback_data": "c:trial"})
+    r.append({"text": "📦 سرویس‌های من", "callback_data": "c:my"})
+    rows.append(r)
     for b in sorted(CFG["buttons"], key=lambda b: b.get("order", 0)):
-        if not b.get("enabled", True): continue
+        if not b.get("enabled", True) or b.get("place") == "app": continue
         if b["type"] == "url": rows.append([{"text": b["text"], "url": b["value"]}])
         elif b["type"] == "webapp": rows.append([{"text": b["text"], "web_app": {"url": b["value"]}}])
         else: rows.append([{"text": b["text"], "callback_data": f"c:txt:{b['id']}"}])
@@ -219,16 +194,10 @@ async def bot_callback(cb: dict):
             await send_config(cid, it["id"], CFG["texts"]["trial_ok"])
         except HTTPException as e:
             await tb._edit(cid, mid, f"⚠️ {e.detail}", back)
-    elif d == "c:plans":
-        rows = [[{"text": f"⭐{p['stars']} · {p['name']} · {p['days']} روز · {p['volume_gb']:g}GB", "callback_data": f"c:buy:{p['id']}"}] for p in sales.list_plans()]
-        await tb._edit(cid, mid, "🛒 <b>پلن مورد نظرت رو انتخاب کن</b>\nپرداخت با ⭐ Stars تلگرام، تحویل آنی.", {"inline_keyboard": rows + back["inline_keyboard"]})
-    elif d.startswith("c:buy:"):
-        p = sales.get_plan(d[6:])
-        if p: await tb._call("sendInvoice", chat_id=cid, **_invoice_args(p, frm["id"]))
     elif d == "c:my":
         its = mine(frm["id"])
         rows = [[{"text": f"{'🟢' if l.get('active', True) else '🔴'} {l.get('label', '?')[:28]}", "callback_data": f"c:cfg:{u}"}] for u, l in its]
-        await tb._edit(cid, mid, "📦 سرویس‌های شما:" if its else "هنوز سرویسی نداری. از تست رایگان یا خرید شروع کن 👇", {"inline_keyboard": rows + back["inline_keyboard"]})
+        await tb._edit(cid, mid, "📦 سرویس‌های شما:" if its else "هنوز سرویسی نداری. از تست رایگان شروع کن 👇", {"inline_keyboard": rows + back["inline_keyboard"]})
     elif d.startswith("c:cfg:") and d[6:] in dict(mine(frm["id"])):
         await send_config(cid, d[6:])
     elif d.startswith("c:qr:") and d[5:] in dict(mine(frm["id"])):
@@ -236,6 +205,15 @@ async def bot_callback(cb: dict):
     elif d.startswith("c:txt:"):
         b = next((b for b in CFG["buttons"] if b["id"] == d[6:]), None)
         if b: await tb._send(cid, b["value"], back)
+
+
+# سازگاری با telegram_bot قدیمی (پرداخت حذف شده)
+async def bot_precheckout(q: dict):
+    await _tb()._call("answerPreCheckoutQuery", pre_checkout_query_id=q["id"], ok=False, error_message="خرید غیرفعال است")
+
+
+async def bot_paid(msg: dict):
+    return
 
 
 # ── صفحات و API ──
@@ -251,28 +229,36 @@ async def page_shop(): return _page("tma_customer.html")
 async def page_admin(): return _page("tma_admin.html")
 
 
+@app.get("/api/shop/theme", include_in_schema=False)
+async def shop_theme(): return CFG["theme"]
+
+
 @app.post("/api/shop/{action}", include_in_schema=False)
 async def shop_api(action: str, request: Request):
     u = tg_user(request)
     try: b = await request.json()
     except Exception: b = {}
     if touch_user(u): await save()
+    adm = is_admin(u["id"])
     if CFG["users"][str(u["id"])].get("banned"): raise HTTPException(403, "دسترسی شما مسدود است")
+    if CFG["maintenance"] and not adm: raise HTTPException(503, "سرویس موقتاً در حال بروزرسانی است")
     if action == "trial": return {"ok": True, "item": await make_trial(u)}
-    if action == "invoice": return {"ok": True, "link": await invoice_link(u, str(b.get("plan")))}
     if action != "me": raise HTTPException(404, "unknown")
     host, t = get_host(request), CFG["trial"]
-    return {"brand": CFG["brand"], "welcome": CFG["texts"]["welcome"], "support": get_support_username(),
-            "user": {"id": u["id"], "name": u.get("first_name", ""), "admin": is_admin(u["id"])},
-            "trial": {"enabled": t["enabled"], "gb": t["gb"], "days": t["days"], "channel": t["channel"],
-                      "used": bool(t["per_user"]) and len(CFG["trials"].get(str(u["id"]), [])) >= int(t["per_user"])},
-            "plans": sales.list_plans(),
-            "buttons": [x for x in sorted(CFG["buttons"], key=lambda x: x.get("order", 0)) if x.get("enabled", True) and x["type"] != "text"],
+    return {"brand": CFG["brand"], "theme": CFG["theme"], "support": get_support_username(),
+            "announce": CFG["texts"]["announce"] if CFG["announce_on"] else "", "guide": CFG["texts"]["guide"],
+            "user": {"id": u["id"], "name": u.get("first_name", ""), "username": u.get("username", ""), "admin": adm},
+            "trial": {"enabled": t["enabled"], "gb": t["gb"], "days": t["days"], "channel": t["channel"], "used": trial_used(u["id"])},
+            "buttons": [x for x in sorted(CFG["buttons"], key=lambda x: x.get("order", 0))
+                        if x.get("enabled", True) and x["type"] != "text" and x.get("place") != "bot"],
             "mine": [item(i, l, host) for i, l in mine(u["id"])]}
 
 
 def _num(v, cast=float, lo=0):
     return max(lo, cast(v or 0))
+
+
+HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 @app.post("/api/shop/admin/{action}", include_in_schema=False)
@@ -281,34 +267,44 @@ async def shop_admin_api(action: str, request: Request):
     if not is_admin(u["id"]): raise HTTPException(403, "شما ادمین ربات نیستید")
     try: b = await request.json()
     except Exception: b = {}
+    host = get_host(request)
     try:
         if action == "state":
-            ss, users = sales.sales_stats(), CFG["users"]
-            return {"brand": CFG["brand"], "trial": CFG["trial"], "texts": CFG["texts"], "plans": sales.list_plans(),
+            users, today = CFG["users"], datetime.now().date().isoformat()
+            used = sum(int(l.get("used_bytes") or 0) for _, l in LINKS.items() if str(l.get("note", "")).startswith("tg:"))
+            return {"brand": CFG["brand"], "theme": CFG["theme"], "trial": CFG["trial"], "texts": CFG["texts"],
+                    "announce_on": CFG["announce_on"], "maintenance": CFG["maintenance"], "me": u["id"], "owner": is_owner(u["id"]),
                     "buttons": sorted(CFG["buttons"], key=lambda x: x.get("order", 0)),
-                    "stats": {**ss, "users": len(users), "banned": sum(1 for x in users.values() if x.get("banned")),
-                              "trials": sum(len(x) for x in CFG["trials"].values())},
-                    "orders": [{k: o.get(k) for k in ("username", "user_id", "plan_id", "amount_stars", "created_at")} for o in sales.SALES["orders"][:40]]}
+                    "admins": [{"id": i, "owner": True} for i in sorted(_tb().ADMIN_IDS)] + [{"id": int(i), "owner": False} for i in CFG["admins"]],
+                    "stats": {"users": len(users), "banned": sum(1 for x in users.values() if x.get("banned")),
+                              "new_today": sum(1 for x in users.values() if str(x.get("first", "")).startswith(today)),
+                              "trials": sum(len(x) for x in CFG["trials"].values()),
+                              "configs": sum(1 for _ in LINKS.items() if True),
+                              "active": sum(1 for _, l in LINKS.items() if l.get("active", True) and str(l.get("note", "")).startswith("tg:")),
+                              "used": used}}
         if action == "trial":
             t = CFG["trial"]
             t.update(enabled=bool(b.get("enabled")), gb=_num(b.get("gb")) or 1, days=_num(b.get("days")) or 1,
                      speed_mbps=_num(b.get("speed_mbps")), ip_limit=_num(b.get("ip_limit"), int), per_user=_num(b.get("per_user"), int),
                      channel=str(b.get("channel") or "").strip()[:64])
-        elif action == "plan_save":
-            pid = str(b.get("id") or "").strip().lower() or "p" + secrets.token_hex(3)
-            old = sales.PLANS.get(pid, {})
-            await sales.upsert_plan(pid, {"id": pid, "name": str(b["name"])[:30], "days": max(1, int(b["days"])), "volume_gb": _num(b["volume_gb"]),
-                                          "speed_mbps": _num(b.get("speed_mbps"), int), "ip_limit": _num(b.get("ip_limit"), int), "stars": max(1, int(b["stars"])),
-                                          "badge": str(b.get("badge") or "")[:24], "featured": bool(b.get("featured")),
-                                          "order": int(b.get("order") or old.get("order") or len(sales.PLANS) + 1)})
-        elif action == "plan_del":
-            await sales.delete_plan(str(b.get("id")))
+        elif action == "theme":
+            th = CFG["theme"]
+            for k in ("accent", "accent2"):
+                if HEX.match(str(b.get(k, ""))): th[k] = b[k]
+            if b.get("mode") in ("dark", "light", "amoled"): th["mode"] = b["mode"]
+            th["glass"] = min(100, max(0, int(b.get("glass", th["glass"]))))
+            th["radius"] = min(30, max(8, int(b.get("radius", th["radius"]))))
+        elif action == "flags":
+            if "maintenance" in b: CFG["maintenance"] = bool(b["maintenance"])
+            if "announce_on" in b: CFG["announce_on"] = bool(b["announce_on"])
         elif action == "btn_save":
             typ, val = str(b.get("type")), str(b.get("value") or "").strip()[:1000]
             if typ not in ("url", "webapp", "text") or not str(b.get("text") or "").strip() or not val: raise ValueError("text")
             if typ != "text" and not val.startswith("https://"): raise ValueError("url")
             bid = str(b.get("id") or "") or secrets.token_hex(3)
-            row = {"id": bid, "text": str(b["text"]).strip()[:40], "type": typ, "value": val, "enabled": bool(b.get("enabled", True)),
+            place = b.get("place") if b.get("place") in ("both", "bot", "app") else "both"
+            row = {"id": bid, "text": str(b["text"]).strip()[:40], "type": typ, "value": val, "place": place,
+                   "enabled": bool(b.get("enabled", True)),
                    "order": int(b.get("order") or 0) or (max([x.get("order", 0) for x in CFG["buttons"]] or [0]) + 1)}
             CFG["buttons"] = [x for x in CFG["buttons"] if x["id"] != bid] + [row]
         elif action == "btn_del":
@@ -321,17 +317,70 @@ async def shop_admin_api(action: str, request: Request):
             for k, x in enumerate(bs): x["order"] = k + 1
         elif action == "texts":
             CFG["brand"] = str(b.get("brand") or "VodiWalker")[:30]
-            for k in ("welcome", "trial_ok", "paid_ok"):
-                if b.get(k): CFG["texts"][k] = str(b[k])[:2000]
+            for k in ("welcome", "trial_ok", "announce", "guide"):
+                if k in b: CFG["texts"][k] = str(b[k])[:2000]
         elif action == "users":
-            q = str(b.get("q") or "").lower()
-            rows = [{"id": k, **v, "trials": len(CFG["trials"].get(k, [])), "configs": len(mine(k))} for k, v in CFG["users"].items()
-                    if not q or q in k or q in str(v.get("username", "")).lower() or q in str(v.get("name", "")).lower()]
+            q, flt = str(b.get("q") or "").lower().lstrip("@"), str(b.get("f") or "")
+            rows = [{"id": k, **v, "trials": len(CFG["trials"].get(k, [])), "configs": len(mine(k)), "bonus": CFG["bonus"].get(k, 0),
+                     "admin": is_admin(k)} for k, v in CFG["users"].items()
+                    if (not q or q in k or q in str(v.get("username", "")).lower() or q in str(v.get("name", "")).lower())
+                    and (flt != "banned" or v.get("banned")) and (flt != "trial" or CFG["trials"].get(k))]
             return {"users": sorted(rows, key=lambda x: x.get("last", ""), reverse=True)[:80]}
+        elif action == "user":
+            k = str(b.get("id"))
+            if k not in CFG["users"]: raise HTTPException(404, "کاربر پیدا نشد")
+            return {"user": {"id": k, **CFG["users"][k], "bonus": CFG["bonus"].get(k, 0), "trials": len(CFG["trials"].get(k, [])),
+                             "admin": is_admin(k)}, "configs": [item(i, l, host) for i, l in mine(k)]}
         elif action == "ban":
-            r = CFG["users"].get(str(b.get("id")))
+            k = str(b.get("id"))
+            r = CFG["users"].get(k)
             if not r: raise HTTPException(404, "کاربر پیدا نشد")
+            if is_admin(k): raise HTTPException(400, "ادمین را نمی‌توان مسدود کرد")
             r["banned"] = not r.get("banned")
+        elif action == "bonus":   # افزایش سقف تست یک کاربر (+n) یا ریست کامل
+            k = str(b.get("id"))
+            if k not in CFG["users"]: raise HTTPException(404, "کاربر پیدا نشد")
+            if b.get("reset"): CFG["trials"].pop(k, None); CFG["bonus"].pop(k, None)
+            else: CFG["bonus"][k] = max(0, int(CFG["bonus"].get(k, 0)) + int(b.get("n", 1)))
+        elif action == "grant":   # ساخت تست دستی برای کاربر با حجم/مدت دلخواه
+            k = str(b.get("id"))
+            r = CFG["users"].get(k)
+            if not r: raise HTTPException(404, "کاربر پیدا نشد")
+            it = await make_trial({"id": int(k), "username": r.get("username", "")}, True, _num(b.get("gb")) or None, _num(b.get("days")) or None)
+            try: await _tb()._send(int(k), "🎁 ادمین یک سرویس تست برای شما فعال کرد. داخل مینی‌اپ ببینیدش.")
+            except Exception: pass
+            return {"ok": True, "item": it}
+        elif action in ("cfg_add", "cfg_toggle", "cfg_del"):
+            uid = str(b.get("uid"))
+            if uid not in LINKS: raise HTTPException(404, "کانفیگ پیدا نشد")
+            if action == "cfg_del":
+                await remove_link(uid)
+            else:
+                async with LINKS_LOCK:
+                    l = LINKS[uid]
+                    if action == "cfg_toggle": l["active"] = not l.get("active", True)
+                    else:
+                        gb, days = float(b.get("gb") or 0), float(b.get("days") or 0)
+                        if gb and l.get("limit_bytes"): l["limit_bytes"] = max(0, int(l["limit_bytes"]) + int(parse_size_to_bytes(gb, "GB")))
+                        elif gb: l["limit_bytes"] = int(parse_size_to_bytes(gb, "GB"))
+                        if days:
+                            try: base = max(datetime.fromisoformat(str(l.get("expires_at"))), datetime.now()) if l.get("expires_at") else datetime.now()
+                            except Exception: base = datetime.now()
+                            l["expires_at"] = (base + timedelta(days=days)).isoformat()
+                        if b.get("reset_usage"): l["used_bytes"] = 0
+                        l["active"] = True
+                await save_state()
+        elif action == "msg":
+            text = str(b.get("text") or "").strip()
+            if not text: raise ValueError("text")
+            await _tb()._send(int(b["id"]), text)
+        elif action == "admin_add":
+            if not is_owner(u["id"]): raise HTTPException(403, "فقط ادمین اصلی")
+            n = int(str(b.get("id")).strip())
+            if n not in CFG["admins"]: CFG["admins"].append(n)
+        elif action == "admin_del":
+            if not is_owner(u["id"]): raise HTTPException(403, "فقط ادمین اصلی")
+            CFG["admins"] = [x for x in CFG["admins"] if int(x) != int(b.get("id"))]
         elif action == "broadcast":
             text, ids = str(b.get("text") or "").strip(), [k for k, v in CFG["users"].items() if not v.get("banned")]
             if not text: raise ValueError("text")
