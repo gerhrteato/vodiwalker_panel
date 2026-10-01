@@ -35,6 +35,19 @@ from main import (
     add_client_to_inbound,
     remove_inbound_client,
     LIVE_PROTOCOLS,
+    CONFIG,
+    DATA_FILE,
+    save_state,
+    unique_ips_for_uuid,
+    get_public_host_strict,
+    get_public_base,
+    _split_base_url,
+    _is_real_public_host,
+    decorate_label,
+    auto_display_name,
+    style_config_name,
+    get_support_username,
+    update_link_fields,
 )
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -170,6 +183,8 @@ async def _edit(chat_id: int, message_id: int, text: str, kb: dict | None = None
     if kb:
         payload["reply_markup"] = kb
     res = await _call("editMessageText", **payload)
+    if res and not res.get("ok") and "not modified" in str(res.get("description", "")).lower():
+        return
     if res is None or not res.get("ok"):
         # اگه ادیت به هر دلیلی نشد (مثلاً پیام قدیمی/حذف‌شده)، پیام جدید بفرست
         await _send(chat_id, text, kb)
@@ -183,9 +198,11 @@ def _is_admin(chat_id: int) -> bool:
 # ── Keyboards ────────────────────────────────────────────────────────────────
 def _main_menu_kb():
     return {"inline_keyboard": [
-        [{"text": "📊 آمار کلی", "callback_data": "stats"}],
-        [{"text": "📋 لیست کانفیگ‌ها", "callback_data": "list:0"}, {"text": "➕ ساخت کانفیگ", "callback_data": "newcfg"}],
-        [{"text": "🗂 گروه‌های ساب", "callback_data": "subs:0"}],
+        [{"text": "⚡ ساخت سریع کانفیگ", "callback_data": "quick"}, {"text": "🧩 ساخت پیشرفته", "callback_data": "newcfg"}],
+        [{"text": "📋 لیست کانفیگ‌ها", "callback_data": "list:0"}, {"text": "🗂 گروه‌های ساب", "callback_data": "subs:0"}],
+        [{"text": "🟢 آنلاین‌ها", "callback_data": "online"}, {"text": "🔥 پرمصرف‌ها", "callback_data": "top"}, {"text": "⏳ نزدیک انقضا", "callback_data": "expiring"}],
+        [{"text": "📊 آمار", "callback_data": "stats"}, {"text": "🖥 سرور", "callback_data": "server"}, {"text": "💾 بکاپ", "callback_data": "backup"}],
+        [{"text": _alerts_label(), "callback_data": "alerts:toggle"}, {"text": "📖 راهنما", "callback_data": "help"}],
         [{"text": "🔄 رفرش", "callback_data": "menu"}],
     ]}
 
@@ -211,7 +228,7 @@ def _links_list_kb(page: int):
 
 def _link_detail_kb(uid: str, active: bool):
     return {"inline_keyboard": [
-        [{"text": "🔗 نمایش لینک اتصال", "callback_data": f"link:{uid}"}],
+        [{"text": "🔗 لینک اتصال + QR", "callback_data": f"link:{uid}"}, {"text": "✏️ ویرایش", "callback_data": f"edit:{uid}"}],
         [{"text": "👥 کاربران این اینباند", "callback_data": f"clients:{uid}:0"}],
         [{"text": "🗂 گروه ساب (لینک حرفه‌ای)", "callback_data": f"cfggroup:{uid}"}],
         [{"text": ("⛔ غیرفعال‌سازی" if active else "✅ فعال‌سازی"), "callback_data": f"toggle:{uid}"}],
@@ -231,7 +248,7 @@ def _clients_list_kb(parent_uid: str, page: int = 0):
         dot = "🟢" if is_link_allowed(l) else "🔴"
         rows.append([
             {"text": f"{dot} {l.get('label','?')[:24]}", "callback_data": f"view:{cid}"},
-            {"text": "🗑", "callback_data": f"delclient:{parent_uid}:{cid}"},
+            {"text": "🗑", "callback_data": f"delclient:{cid}"},
         ])
     nav = []
     if start > 0:
@@ -257,7 +274,7 @@ def _format_clients_list(parent_uid: str) -> str:
 
 def _confirm_delete_client_kb(parent_uid: str, client_id: str):
     return {"inline_keyboard": [
-        [{"text": "✅ بله، حذف کن", "callback_data": f"delclientok:{parent_uid}:{client_id}"},
+        [{"text": "✅ بله، حذف کن", "callback_data": f"delclientok:{client_id}"},
          {"text": "❌ انصراف", "callback_data": f"clients:{parent_uid}:0"}],
     ]}
 
@@ -302,6 +319,12 @@ def _confirm_delete_kb(uid: str):
 # ── Wizard keyboards ─────────────────────────────────────────────────────────
 def _wizard_cancel_kb():
     return {"inline_keyboard": [[{"text": "❌ انصراف", "callback_data": "w:cancel"}]]}
+
+def _wizard_label_kb():
+    return {"inline_keyboard": [
+        [{"text": "🎲 اسم خودکار خفن", "callback_data": "w:autolabel"}],
+        [{"text": "❌ انصراف", "callback_data": "w:cancel"}],
+    ]}
 
 def _wizard_protocol_kb():
     rows = [[{"text": _protocol_label(p), "callback_data": f"w:proto:{p}"}] for p in PROTOCOLS]
@@ -349,7 +372,7 @@ def _wizard_prompt(step: str, data: dict) -> str:
     n = WIZARD_STEPS.index(step) + 1 if step in WIZARD_STEPS else len(WIZARD_STEPS)
     head = f"🧩 ساخت کانفیگ جدید — مرحله {n}/{len(WIZARD_STEPS)}\n\n"
     if step == "label":
-        return head + "✏️ اسم/برچسب کانفیگ رو بفرست:"
+        return head + "✏️ اسم/برچسب کانفیگ رو بفرست (مثلاً <code>Vodiwalker</code> → <code>Vodiwalker|Tofan🚀</code>)\nیا اسم خودکار خفن رو بزن:"
     if step == "protocol":
         return head + "🌐 پروتکل رو از دکمه‌های زیر انتخاب کن:\n<i>🔗 یعنی این پروتکل فقط لینک/کانفیگ می‌سازه و خودِ این پنل بهش سرویس نمی‌ده (برای استفاده روی یک نود Xray-core جدا).</i>"
     if step == "fingerprint":
@@ -405,9 +428,13 @@ def _format_detail(uid: str, l: dict) -> str:
     if limit_bytes:
         pct = min(100, round((used_bytes / limit_bytes) * 100, 1))
         usage_line += f"\n{_progress_bar(pct)}  {pct}%"
+    dl = _days_left(l)
+    dl_txt = "" if dl is None else (f" ({int(dl)} روز مانده)" if dl > 0 else " (منقضی)")
     return (
         f"<b>{_h(l.get('label','?'))}</b>\n"
         f"وضعیت: {status}\n"
+        f"🟣 آنلاین همین الان: {_online_count(uid)}\n"
+        f"نوع: {_live_badge(l)}\n"
         f"{usage_line}\n"
         f"محدودیت سرعت: {speed}\n"
         f"محدودیت آی‌پی: {l.get('ip_limit',0) or 'نامحدود'}\n"
@@ -415,14 +442,16 @@ def _format_detail(uid: str, l: dict) -> str:
         f"Fingerprint: {_fp_label(l.get('fingerprint', DEFAULT_FINGERPRINT))}\n"
         f"ALPN: {alpn}\n"
         f"پورت: {l.get('port', DEFAULT_PORT)}\n"
-        f"انقضا: {exp_txt}\n"
+        f"انقضا: {exp_txt}{dl_txt}\n"
         f"UUID: <code>{uid}</code>"
     )
 
 # ── Sub-group (لینک ساب حرفه‌ای) view builders ────────────────────────────────
 def _group_public_url(s: dict) -> str:
-    host = get_host()
-    return f"https://{host}/p/{s.get('uuid_key','')}"
+    base = get_public_base()
+    if not base:
+        return "⚠️ آدرس پنل نامشخص است (دستور /seturl)"
+    return f"{base}/p/{s.get('uuid_key','')}"
 
 def _subs_list_kb(page: int):
     items = sorted(SUBS.items(), key=lambda kv: kv[1].get("created_at", ""), reverse=True)
@@ -531,16 +560,479 @@ def _admin_welcome_text(base: str) -> str:
     active = sum(1 for l in LINKS.values() if is_link_allowed(l))
     return f"{base}\n\n🌐 {total} کانفیگ ({active} فعال) · 🗂 {len(SUBS)} گروه ساب"
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  قابلیت‌های حرفه‌ای: آدرس واقعی، کارت لینک + QR، ساخت سریع، ویرایش، هشدار، بکاپ
+# ═════════════════════════════════════════════════════════════════════════════
+import json as _json
+import time as _time
+from urllib.parse import quote as _urlquote
+
+try:
+    import psutil as _psutil
+except Exception:
+    _psutil = None
+
+NO_HOST_MSG = (
+    "⚠️ <b>آدرس واقعی پنل هنوز مشخص نیست.</b>\n"
+    "برای اینکه لینک‌ها آدرس فیک (localhost) نداشته باشن، یکی از این دو کار رو بکن:\n\n"
+    "۱) یک‌بار وارد پنل (داشبورد) بشو؛ آدرس خودکار ذخیره می‌شه.\n"
+    "۲) همین‌جا بفرست:\n<code>/seturl https://panel.example.com</code>"
+)
+
+_alerts_enabled = True
+_alert_keys: set = set()
+_alert_task: asyncio.Task | None = None
+_reach_cache: dict = {"t": 0.0, "host": "", "ok": None}
+
+QUICK_PRESETS = [
+    (10, 30), (30, 30), (50, 30), (100, 30), (200, 60), (0, 30), (0, 0),
+]
+
+
+def _real_host():
+    return get_public_host_strict()
+
+
+def _base_url():
+    return get_public_base()
+
+
+def _live_proto(proto: str) -> bool:
+    return proto in LIVE_PROTOCOLS
+
+
+def _real_link(uid: str, l: dict):
+    # لینک واقعی با آدرس واقعی پنل؛ اگر آدرس معتبر نباشه هیچ لینک فیکی ساخته نمی‌شه.
+    host = _real_host()
+    if not host:
+        return None, NO_HOST_MSG
+    proto = l.get("protocol", DEFAULT_PROTOCOL)
+    if proto == "vless-tcp" and not str(CONFIG.get("tcp_public_host") or "").strip():
+        return None, ("⚠️ این کانفیگ «VLESS TCP خام» است و به آدرس TCP عمومی نیاز دارد؛ "
+                      "در تنظیمات پنل «TCP Public Host/Port» رو وارد کن تا لینک واقعی ساخته بشه.")
+    return vless_link_for_link(l, uid, host), None
+
+
+def _qr_url(data: str) -> str:
+    return "https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=12&data=" + _urlquote(data, safe="")
+
+
+async def _send_photo(chat_id: int, url: str, caption: str = "", kb: dict | None = None):
+    payload = {"chat_id": chat_id, "photo": url, "caption": caption[:1000], "parse_mode": "HTML"}
+    if kb:
+        payload["reply_markup"] = kb
+    return await _call("sendPhoto", **payload)
+
+
+async def _upload_document(chat_id: int, filename: str, content: bytes, caption: str = ""):
+    if _client is None:
+        return None
+    try:
+        r = await _client.post(
+            f"{API_BASE}/sendDocument",
+            data={"chat_id": str(chat_id), "caption": caption[:900], "parse_mode": "HTML"},
+            files={"document": (filename, content, "application/octet-stream")},
+            timeout=60,
+        )
+        return r.json()
+    except Exception as e:
+        logger.warning(f"Telegram sendDocument error: {e}")
+        return None
+
+
+async def _panel_reachable(base: str):
+    # تست واقعی: آیا همین آدرس از بیرون (با HTTPS) جواب می‌ده؟ نتیجه ۶۰ ثانیه کش می‌شه.
+    if _client is None or not base:
+        return None
+    now = _time.time()
+    if _reach_cache["host"] == base and now - _reach_cache["t"] < 60:
+        return _reach_cache["ok"]
+    ok = None
+    try:
+        r = await _client.get(base + "/assets/ui.css", timeout=8, follow_redirects=True)
+        ok = r.status_code == 200
+    except Exception:
+        ok = False
+    _reach_cache.update({"t": now, "host": base, "ok": ok})
+    return ok
+
+
+def _online_count(uid: str) -> int:
+    try:
+        return len(unique_ips_for_uuid(uid))
+    except Exception:
+        return 0
+
+
+def _days_left(l: dict):
+    exp = l.get("expires_at")
+    if not exp:
+        return None
+    try:
+        return (datetime.fromisoformat(str(exp)) - datetime.now()).total_seconds() / 86400
+    except Exception:
+        return None
+
+
+def _usage_pct(l: dict):
+    limit = int(l.get("limit_bytes") or 0)
+    if limit <= 0:
+        return None
+    return min(100.0, round(int(l.get("used_bytes") or 0) / limit * 100, 1))
+
+
+def _live_badge(l: dict) -> str:
+    return "✅ واقعی و فعال روی سرور" if _live_proto(l.get("protocol", DEFAULT_PROTOCOL)) else "🔗 فقط لینک (نیاز به هسته‌ی جدا)"
+
+
+def _new_label(base: str | None = None) -> str:
+    if base:
+        return decorate_label(str(base).strip()[:40]) if CONFIG.get("name_style_enabled", True) else str(base).strip()[:60]
+    return auto_display_name()
+
+
+def _preferred_protocol() -> str:
+    return "vless-ws" if "vless-ws" in LIVE_PROTOCOLS else DEFAULT_PROTOCOL
+
+
+async def _create_real_config(label: str, gb: float, days: int, protocol: str | None = None, **extra):
+    expires_at = (datetime.now() + timedelta(days=days)).isoformat() if days and days > 0 else None
+    limit_bytes = int(parse_size_to_bytes(gb, "GB")) if gb and gb > 0 else 0
+    return await make_link(
+        label=label, limit_bytes=limit_bytes, expires_at=expires_at,
+        protocol=protocol or _preferred_protocol(), **extra,
+    )
+
+
+def _link_card_text(uid: str, l: dict, base: str | None, link: str | None, warn: str | None, reach) -> str:
+    host = _real_host() or "—"
+    lines = [f"🔗 <b>{_h(l.get('label', '?'))}</b>", _live_badge(l),
+             f"🌐 سرور: <code>{_h(host)}</code> · پورت {l.get('port', DEFAULT_PORT)}"]
+    if reach is True:
+        lines.append("🟢 آدرس پنل از بیرون در دسترسه")
+    elif reach is False:
+        lines.append("🟡 تست دسترسی آدرس انجام نشد؛ دامنه/Proxy رو بررسی کن")
+    if warn:
+        lines.append("\n" + warn)
+    if link:
+        lines.append(f"\n<b>لینک اتصال (بزن تا کپی بشه):</b>\n<code>{_h(link)}</code>")
+    if base:
+        lines.append(f"\n📄 صفحه‌ی اشتراک:\n<code>{base}/subscription/{uid}</code>")
+        lines.append(f"📥 لینک ساب برای اپ:\n<code>{base}/sub/{uid}</code>")
+    sid = l.get("sub_id")
+    if sid and sid in SUBS:
+        lines.append(f"\n✨ ساب حرفه‌ای گروه «{_h(SUBS[sid].get('name', '?'))}»:\n<code>{_group_public_url(SUBS[sid])}</code>")
+    sup = get_support_username()
+    lines.append(f"\n💬 پشتیبانی: {sup}")
+    return "\n".join(lines)
+
+
+async def _send_link_card(chat_id: int, uid: str, l: dict, with_qr: bool = True, prefix: str = ""):
+    link, warn = _real_link(uid, l)
+    base = _base_url()
+    reach = await _panel_reachable(base) if base else None
+    text = (prefix + "\n\n" if prefix else "") + _link_card_text(uid, l, base, link, warn, reach)
+    kb = {"inline_keyboard": [
+        [{"text": "✏️ ویرایش", "callback_data": f"edit:{uid}"}, {"text": "📋 جزئیات", "callback_data": f"view:{uid}"}],
+        *([[{"text": "🌐 باز کردن صفحه‌ی اشتراک", "url": f"{base}/subscription/{uid}"}]] if base else []),
+        [{"text": "⬅ منوی اصلی", "callback_data": "menu"}],
+    ]}
+    await _send(chat_id, text, kb)
+    if with_qr and link:
+        await _send_photo(chat_id, _qr_url(link), "📷 QR کانفیگ — با اپ اسکن کن")
+
+
+def _quick_menu_kb():
+    rows, row = [], []
+    for gb, days in QUICK_PRESETS:
+        vol = f"{gb}GB" if gb else "♾"
+        dur = f"{days} روز" if days else "بدون انقضا"
+        row.append({"text": f"{vol} · {dur}", "callback_data": f"qc:{gb}:{days}"})
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    rows.append([{"text": "🧩 ساخت پیشرفته (مرحله‌ای)", "callback_data": "newcfg"}])
+    rows.append([{"text": "⬅ منوی اصلی", "callback_data": "menu"}])
+    return {"inline_keyboard": rows}
+
+
+def _edit_kb(uid: str):
+    return {"inline_keyboard": [
+        [{"text": "➕ 5GB", "callback_data": f"ed:gb:{uid}:5"}, {"text": "➕ 10GB", "callback_data": f"ed:gb:{uid}:10"},
+         {"text": "➕ 50GB", "callback_data": f"ed:gb:{uid}:50"}],
+        [{"text": "📅 +7 روز", "callback_data": f"ed:d:{uid}:7"}, {"text": "📅 +30 روز", "callback_data": f"ed:d:{uid}:30"},
+         {"text": "📅 +90 روز", "callback_data": f"ed:d:{uid}:90"}],
+        [{"text": "🔄 ریست مصرف", "callback_data": f"ed:reset:{uid}"}, {"text": "♾ حجم نامحدود", "callback_data": f"ed:unl:{uid}"}],
+        [{"text": "🎲 اسم خفن جدید", "callback_data": f"ed:rname:{uid}"}, {"text": "✏️ تغییر نام", "callback_data": f"ed:name:{uid}"}],
+        [{"text": "⬅ بازگشت", "callback_data": f"view:{uid}"}],
+    ]}
+
+
+def _alerts_label() -> str:
+    return "🔔 هشدارها: روشن" if _alerts_enabled else "🔕 هشدارها: خاموش"
+
+
+def _list_kb(items, back="menu", title_prefix=""):
+    rows = []
+    for uid, l in items[:12]:
+        dot = "🟢" if is_link_allowed(l) else "🔴"
+        rows.append([{"text": f"{dot} {str(l.get('label', '?'))[:30]}", "callback_data": f"view:{uid}"}])
+    rows.append([{"text": "⬅ منوی اصلی", "callback_data": back}])
+    return {"inline_keyboard": rows}
+
+
+def _top_items(n=10):
+    return sorted(LINKS.items(), key=lambda kv: int(kv[1].get("used_bytes") or 0), reverse=True)[:n]
+
+
+def _expiring_items():
+    out = []
+    for uid, l in LINKS.items():
+        if not l.get("active", True):
+            continue
+        d = _days_left(l)
+        p = _usage_pct(l)
+        if (d is not None and d <= 3) or (p is not None and p >= 85):
+            out.append((uid, l))
+    out.sort(key=lambda kv: (_days_left(kv[1]) if _days_left(kv[1]) is not None else 9999))
+    return out
+
+
+def _server_text() -> str:
+    lines = ["🖥 <b>وضعیت سرور</b>\n"]
+    if _psutil:
+        try:
+            vm = _psutil.virtual_memory()
+            du = _psutil.disk_usage("/")
+            lines.append(f"⚙️ CPU: <b>{_psutil.cpu_percent(interval=0.3)}%</b>")
+            lines.append(f"🧠 RAM: <b>{vm.percent}%</b> ({fmt_bytes(vm.used)} / {fmt_bytes(vm.total)})")
+            lines.append(f"💽 دیسک: <b>{du.percent}%</b> ({fmt_bytes(du.used)} / {fmt_bytes(du.total)})")
+            net = _psutil.net_io_counters()
+            lines.append(f"🌐 شبکه: ⬆ {fmt_bytes(net.bytes_sent)} · ⬇ {fmt_bytes(net.bytes_recv)}")
+        except Exception:
+            lines.append("اطلاعات سخت‌افزاری در دسترس نیست.")
+    else:
+        lines.append("ماژول psutil نصب نیست.")
+    host = _real_host()
+    lines.append(f"\n🌐 آدرس پنل: <code>{_h(host) if host else 'نامشخص'}</code>")
+    return "\n".join(lines)
+
+
+def _stats_text() -> str:
+    total = len(LINKS)
+    active = sum(1 for l in LINKS.values() if is_link_allowed(l))
+    used = sum(int(l.get("used_bytes", 0) or 0) for l in LINKS.values())
+    online = sum(_online_count(uid) for uid in LINKS)
+    near = len(_expiring_items())
+    top = _top_items(1)
+    top_line = f"\n🔥 پرمصرف‌ترین: {_h(top[0][1].get('label', '?'))} ({fmt_bytes(int(top[0][1].get('used_bytes') or 0))})" if top and int(top[0][1].get("used_bytes") or 0) else ""
+    return (
+        "📊 <b>آمار کلی VodiWalker</b>\n\n"
+        f"🌐 کل کانفیگ‌ها: <b>{total}</b>\n"
+        f"🟢 فعال: <b>{active}</b> · 🔴 غیرفعال/منقضی: <b>{total - active}</b>\n"
+        f"🟣 آنلاین همین الان: <b>{online}</b> اتصال\n"
+        f"📦 مجموع کل ترافیک: <b>{fmt_bytes(used)}</b>\n"
+        f"⏳ نزدیک انقضا/اتمام حجم: <b>{near}</b>\n"
+        f"🗂 گروه‌های ساب: <b>{len(SUBS)}</b>"
+        f"{top_line}"
+    )
+
+
+async def _do_backup(chat_id: int):
+    try:
+        if DATA_FILE.exists():
+            content = DATA_FILE.read_bytes()
+        else:
+            content = _json.dumps({"links": dict(LINKS), "subs": dict(SUBS)}, ensure_ascii=False, indent=1).encode()
+    except Exception as e:
+        await _send(chat_id, f"❌ خواندن بکاپ ناموفق بود: {_h(e)}")
+        return
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    res = await _upload_document(chat_id, f"vodiwalker-backup-{stamp}.json", content,
+                                 f"💾 <b>بکاپ VodiWalker</b>\n{len(LINKS)} کانفیگ · {len(SUBS)} گروه\n⚠️ این فایل حاوی UUID همه‌ی کانفیگ‌هاست؛ جای امن نگهش دار.")
+    if not res or not res.get("ok"):
+        await _send(chat_id, "❌ ارسال فایل بکاپ ناموفق بود.")
+
+
+async def _set_public_url(chat_id: int, raw: str):
+    raw = (raw or "").strip()
+    scheme, host = _split_base_url(raw)
+    if not host or not _is_real_public_host(host):
+        await _send(chat_id, "❌ آدرس معتبر نیست. نمونه:\n<code>/seturl https://panel.example.com</code>\n(localhost و آی‌پی داخلی قبول نمی‌شه)")
+        return
+    CONFIG["public_base_url"] = f"{scheme}://{host}"
+    await save_state()
+    _reach_cache["t"] = 0
+    await _send(chat_id, f"✅ آدرس پنل ذخیره شد:\n<code>{scheme}://{host}</code>\nاز این به بعد همه‌ی لینک‌ها با همین آدرس واقعی ساخته می‌شن.", _main_menu_kb())
+
+
+async def _bulk_create(chat_id: int, args: list):
+    # /bulk 10 30GB 30 [نام]
+    try:
+        n = int(args[0]); vol = args[1] if len(args) > 1 else "0"; days = int(args[2]) if len(args) > 2 else 30
+    except Exception:
+        await _send(chat_id, "فرمت: <code>/bulk تعداد حجم روز [نام]</code>\nمثال: <code>/bulk 10 30GB 30 Vodiwalker</code>\n(حجم 0 = نامحدود)")
+        return
+    if not (1 <= n <= 50):
+        await _send(chat_id, "تعداد باید بین 1 تا 50 باشه.")
+        return
+    vb = _parse_volume_text(vol)
+    if vb is None:
+        await _send(chat_id, "❗️ فرمت حجم درسته نیست (مثلاً 30GB).")
+        return
+    if not _real_host():
+        await _send(chat_id, NO_HOST_MSG)
+        return
+    base_name = " ".join(args[3:]).strip()[:30] or "VodiWalker"
+    await _send(chat_id, f"⏳ در حال ساخت {n} کانفیگ واقعی…")
+    sid, sub = await create_sub_group(name=f"{base_name} · {datetime.now().strftime('%m/%d %H:%M')}")
+    lines, made = [], 0
+    for i in range(n):
+        label = style_config_name(base_name, index=i) if CONFIG.get("name_style_enabled", True) else f"{base_name} {i + 1}"
+        expires_at = (datetime.now() + timedelta(days=days)).isoformat() if days > 0 else None
+        uid, link = await make_link(label=label, limit_bytes=vb or 0, expires_at=expires_at, protocol=_preferred_protocol())
+        await set_link_sub(uid, sid)
+        real, _w = _real_link(uid, link)
+        if real:
+            lines.append(real)
+            made += 1
+    txt = "\n".join(lines).encode()
+    await _upload_document(chat_id, f"configs-{made}.txt", txt, f"✅ <b>{made} کانفیگ واقعی</b> ساخته شد.")
+    await _send(chat_id, f"✅ {made} کانفیگ ساخته و داخل یک گروه ساب گذاشته شد.\n\n✨ لینک ساب حرفه‌ای گروه (برای مشتری):\n<code>{_group_public_url(SUBS[sid])}</code>", _main_menu_kb())
+
+
+def _alert_conditions():
+    # شرایط هشدار فعلی → {key: text}
+    out = {}
+    for uid, l in LINKS.items():
+        if not l.get("active", True):
+            continue
+        name = _h(l.get("label", "?"))
+        d = _days_left(l)
+        p = _usage_pct(l)
+        if d is not None and d <= 0:
+            out[f"{uid}:expired"] = f"⛔ «{name}» منقضی شد"
+        elif d is not None and d <= 2:
+            out[f"{uid}:exp2"] = f"⏳ «{name}» {max(0, int(d * 24))} ساعت دیگه منقضی می‌شه"
+        if p is not None and p >= 100:
+            out[f"{uid}:full"] = f"📦 «{name}» حجمش تموم شد"
+        elif p is not None and p >= 90:
+            out[f"{uid}:vol90"] = f"📉 «{name}» {p}% حجمش مصرف شده"
+    return out
+
+
+async def _alert_loop():
+    global _alert_keys
+    first = True
+    while _running:
+        try:
+            cond = _alert_conditions()
+            if first:
+                _alert_keys = set(cond)          # بعد از ری‌استارت، هشدارهای قدیمی دوباره اسپم نشن
+                first = False
+            else:
+                new = [t for k, t in cond.items() if k not in _alert_keys]
+                _alert_keys = set(cond)
+                if new and _alerts_enabled and ADMIN_IDS:
+                    text = "🔔 <b>هشدار خودکار VodiWalker</b>\n\n" + "\n".join(new[:15])
+                    kb = {"inline_keyboard": [[{"text": "⏳ نمایش لیست", "callback_data": "expiring"}]]}
+                    for aid in ADMIN_IDS:
+                        await _send(aid, text, kb)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Telegram alert loop error: {e}")
+        try:
+            await asyncio.sleep(600)
+        except asyncio.CancelledError:
+            break
+
+
+BOT_COMMANDS = [
+    ("start", "منوی اصلی"), ("new", "ساخت سریع کانفیگ"), ("find", "جستجوی کانفیگ"),
+    ("online", "کاربران آنلاین"), ("top", "پرمصرف‌ترین‌ها"), ("expiring", "نزدیک انقضا"),
+    ("server", "وضعیت سرور"), ("bulk", "ساخت دسته‌ای"), ("backup", "بکاپ"),
+    ("seturl", "ثبت آدرس پنل"), ("id", "شناسه‌ی عددی من"), ("help", "راهنما"),
+]
+
+HELP_TEXT = (
+    "📖 <b>راهنمای ربات VodiWalker</b>\n\n"
+    "⚡ /new — ساخت سریع کانفیگ واقعی (یک‌کلیکی، با اسم خفن)\n"
+    "🔎 /find نام — جستجو بین کانفیگ‌ها (یا مستقیم اسم رو بفرست)\n"
+    "🟢 /online — کاربران آنلاین همین الان\n"
+    "🔥 /top — پرمصرف‌ترین کانفیگ‌ها\n"
+    "⏳ /expiring — نزدیک انقضا یا اتمام حجم\n"
+    "🖥 /server — وضعیت CPU/RAM/دیسک\n"
+    "📦 /bulk 10 30GB 30 نام — ساخت دسته‌ای + گروه ساب\n"
+    "💾 /backup — دریافت فایل بکاپ\n"
+    "🌐 /seturl https://دامنه — ثبت آدرس واقعی پنل\n"
+    "🔔 /alerts on|off — هشدار خودکار انقضا و حجم\n"
+    "🆔 /id — شناسه‌ی عددی تلگرام شما"
+)
+
+
 async def _handle_message(msg: dict):
     chat_id = msg.get("chat", {}).get("id")
     text = (msg.get("text") or "").strip()
     if chat_id is None:
         return
 
+    cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+    args = text.split()[1:] if cmd else []
+
+    if cmd == "/id":
+        await _send(chat_id, f"🆔 شناسه‌ی عددی شما: <code>{chat_id}</code>\nاین عدد رو توی تنظیمات پنل (آیدی ادمین‌ها) بذار.")
+        return
+
     # این ربات فقط برای مدیریت پنل است؛ فقط ادمین‌های مجاز (TELEGRAM_ADMIN_IDS)
     # اجازه‌ی استفاده دارند.
     if not _is_admin(chat_id):
         return
+
+    if cmd in ("/new", "/quick"):
+        _pending.pop(chat_id, None)
+        await _send(chat_id, "⚡ <b>ساخت سریع کانفیگ واقعی</b>\nحجم و مدت رو انتخاب کن؛ اسم خفن و لینک واقعی خودکار ساخته می‌شه:", _quick_menu_kb())
+        return
+    if cmd == "/help":
+        await _send(chat_id, HELP_TEXT, _main_menu_kb())
+        return
+    if cmd == "/server":
+        await _send(chat_id, _server_text(), _main_menu_kb())
+        return
+    if cmd == "/backup":
+        await _do_backup(chat_id)
+        return
+    if cmd == "/online":
+        items = [(u, l) for u, l in LINKS.items() if _online_count(u) > 0]
+        await _send(chat_id, f"🟢 <b>آنلاین‌ها</b> ({len(items)} کانفیگ)" if items else "الان هیچ کاربری آنلاین نیست.", _list_kb(items))
+        return
+    if cmd == "/top":
+        await _send(chat_id, "🔥 <b>پرمصرف‌ترین کانفیگ‌ها</b>", _list_kb(_top_items()))
+        return
+    if cmd == "/expiring":
+        items = _expiring_items()
+        await _send(chat_id, f"⏳ <b>نزدیک انقضا / اتمام حجم</b> ({len(items)})" if items else "✅ هیچ کانفیگی نزدیک انقضا یا اتمام حجم نیست.", _list_kb(items))
+        return
+    if cmd == "/seturl":
+        await _set_public_url(chat_id, args[0] if args else "")
+        return
+    if cmd == "/bulk":
+        await _bulk_create(chat_id, args)
+        return
+    if cmd == "/alerts":
+        global _alerts_enabled
+        if args and args[0].lower() in ("on", "off"):
+            _alerts_enabled = args[0].lower() == "on"
+        await _send(chat_id, f"{_alerts_label()}\nبرای تغییر: <code>/alerts on</code> یا <code>/alerts off</code>", _main_menu_kb())
+        return
+    if cmd == "/find":
+        _pending.pop(chat_id, None)
+        text = " ".join(args)
+        if not text:
+            await _send(chat_id, "اسم کانفیگ رو بعد از /find بنویس. مثال: <code>/find Tofan</code>")
+            return
+        cmd = ""
 
     if text.startswith("/start") or text == "/admin":
         _pending.pop(chat_id, None)
@@ -609,7 +1101,7 @@ async def _handle_message(msg: dict):
         data = pending["data"]
 
         if step == "label":
-            data["label"] = text[:60] or "کانفیگ جدید"
+            data["label"] = _new_label(text[:40]) if text else auto_display_name()
             pending["step"] = "protocol"
             await _send(chat_id, _wizard_prompt("protocol", data), _wizard_protocol_kb())
             return
@@ -679,8 +1171,26 @@ async def _handle_message(msg: dict):
             await _send(chat_id, _wizard_summary(data), _wizard_confirm_kb())
             return
 
+    if pending and pending.get("action") == "rename" and text and not text.startswith("/"):
+        uid = pending.get("uid")
+        _pending.pop(chat_id, None)
+        l = await update_link_fields(uid, label=_new_label(text[:40])) if uid in LINKS else None
+        if not l:
+            await _send(chat_id, "این کانفیگ دیگه وجود نداره.", _main_menu_kb())
+            return
+        await _send(chat_id, f"✅ نام عوض شد.\n\n{_format_detail(uid, l)}", _edit_kb(uid))
+        return
+
+    # جستجو: هر متنی که دستور نباشه = جستجو بین اسم کانفیگ‌ها
+    if text and not text.startswith("/") and len(text) >= 2:
+        q = text.lower()
+        items = [(u, l) for u, l in LINKS.items() if q in str(l.get("label", "")).lower() or u.lower().startswith(q)]
+        if items:
+            await _send(chat_id, f"🔎 <b>{len(items)} نتیجه برای «{_h(text)}»</b>", _list_kb(sorted(items, key=lambda kv: str(kv[1].get('label', '')))))
+            return
+
     # پیام ناشناخته → منو رو نشون بده
-    await _send(chat_id, "از دکمه‌های زیر استفاده کن:", _main_menu_kb())
+    await _send(chat_id, "از دکمه‌های زیر استفاده کن (یا بخشی از اسم کانفیگ رو بفرست تا پیداش کنم 🔎):", _main_menu_kb())
 
 async def _handle_callback(cb: dict):
     chat_id = cb.get("message", {}).get("chat", {}).get("id")
@@ -697,23 +1207,101 @@ async def _handle_callback(cb: dict):
         return
     await _answer_cb(cb_id)
 
+    if data == "quick":
+        _pending.pop(chat_id, None)
+        await _edit(chat_id, message_id, "⚡ <b>ساخت سریع کانفیگ واقعی</b>\nحجم و مدت رو انتخاب کن؛ اسم خفن و لینک واقعی خودکار ساخته می‌شه:", _quick_menu_kb())
+        return
+
+    if data.startswith("qc:"):
+        if not _real_host():
+            await _edit(chat_id, message_id, NO_HOST_MSG, _main_menu_kb())
+            return
+        try:
+            _, gb_s, days_s = data.split(":")
+            gb, days = float(gb_s), int(days_s)
+        except Exception:
+            await _answer_cb(cb_id, "دکمه نامعتبر")
+            return
+        uid, link = await _create_real_config(auto_display_name(), gb, days)
+        await _edit(chat_id, message_id, f"✅ کانفیگ واقعی ساخته شد.\n\n{_format_detail(uid, link)}", _link_detail_kb(uid, link["active"]))
+        await _send_link_card(chat_id, uid, link)
+        return
+
+    if data == "online":
+        items = [(u, l) for u, l in LINKS.items() if _online_count(u) > 0]
+        await _edit(chat_id, message_id, f"🟢 <b>آنلاین‌ها</b> ({len(items)} کانفیگ)" if items else "الان هیچ کاربری آنلاین نیست.", _list_kb(items))
+        return
+
+    if data == "top":
+        await _edit(chat_id, message_id, "🔥 <b>پرمصرف‌ترین کانفیگ‌ها</b>", _list_kb(_top_items()))
+        return
+
+    if data == "expiring":
+        items = _expiring_items()
+        await _edit(chat_id, message_id, f"⏳ <b>نزدیک انقضا / اتمام حجم</b> ({len(items)})" if items else "✅ هیچ کانفیگی نزدیک انقضا یا اتمام حجم نیست.", _list_kb(items))
+        return
+
+    if data == "server":
+        await _edit(chat_id, message_id, _server_text(), _main_menu_kb())
+        return
+
+    if data == "backup":
+        await _do_backup(chat_id)
+        return
+
+    if data == "help":
+        await _edit(chat_id, message_id, HELP_TEXT, _main_menu_kb())
+        return
+
+    if data == "alerts:toggle":
+        global _alerts_enabled
+        _alerts_enabled = not _alerts_enabled
+        await _edit(chat_id, message_id, _admin_welcome_text("🛠 <b>VodiWalker Control Center</b>"), _main_menu_kb())
+        return
+
+    if data.startswith("edit:"):
+        uid = data.split(":", 1)[1]
+        l = LINKS.get(uid)
+        if not l:
+            await _edit(chat_id, message_id, "این کانفیگ دیگه وجود نداره.", _main_menu_kb())
+            return
+        await _edit(chat_id, message_id, f"✏️ <b>ویرایش سریع</b>\n\n{_format_detail(uid, l)}", _edit_kb(uid))
+        return
+
+    if data.startswith("ed:"):
+        parts = data.split(":")
+        kind, uid = parts[1], parts[2]
+        l = LINKS.get(uid)
+        if not l:
+            await _edit(chat_id, message_id, "این کانفیگ دیگه وجود نداره.", _main_menu_kb())
+            return
+        if kind == "name":
+            _pending[chat_id] = {"action": "rename", "uid": uid}
+            await _edit(chat_id, message_id, "✏️ اسم جدید رو بفرست (مثلاً <code>Vodiwalker</code>؛ خودم تبدیلش می‌کنم به <code>Vodiwalker|Tofan🚀</code>):", _wizard_cancel_kb())
+            return
+        if kind == "gb":
+            if not int(l.get("limit_bytes") or 0):
+                await _answer_cb(cb_id, "این کانفیگ حجم نامحدود دارد؛ اول یک سقف بگذار.")
+                return
+            l = await update_link_fields(uid, add_bytes=int(parse_size_to_bytes(float(parts[3]), "GB")))
+        elif kind == "d":
+            l = await update_link_fields(uid, extend_days=int(parts[3]))
+        elif kind == "reset":
+            l = await update_link_fields(uid, reset_usage=True)
+        elif kind == "unl":
+            l = await update_link_fields(uid, set_limit_bytes=0)
+        elif kind == "rname":
+            l = await update_link_fields(uid, label=auto_display_name())
+        await _edit(chat_id, message_id, f"✅ انجام شد.\n\n{_format_detail(uid, l)}", _edit_kb(uid))
+        return
+
     if data == "menu":
         _pending.pop(chat_id, None)
         await _edit(chat_id, message_id, _admin_welcome_text(get_bot_text("admin_menu", "🛠 <b>VodiWalker Control Center</b>")), _main_menu_kb())
         return
 
     if data == "stats":
-        total = len(LINKS)
-        active = sum(1 for l in LINKS.values() if is_link_allowed(l))
-        total_used = sum(int(l.get("used_bytes", 0) or 0) for l in LINKS.values())
-        await _edit(chat_id, message_id,
-                    f"📊 <b>آمار کلی VodiWalker</b>\n\n"
-                    f"🌐 کل کانفیگ‌ها: <b>{total}</b>\n"
-                    f"🟢 فعال: <b>{active}</b>\n"
-                    f"🔴 غیرفعال/منقضی: <b>{total-active}</b>\n"
-                    f"📦 کل مصرف: <b>{fmt_bytes(total_used)}</b>\n"
-                    f"🗂 گروه‌های ساب: <b>{len(SUBS)}</b>",
-                    _main_menu_kb())
+        await _edit(chat_id, message_id, _stats_text(), _main_menu_kb())
         return
 
     if data.startswith("list:"):
@@ -839,7 +1427,7 @@ async def _handle_callback(cb: dict):
 
     if data == "newcfg":
         _pending[chat_id] = {"action": "wizard", "step": "label", "data": {}}
-        await _edit(chat_id, message_id, _wizard_prompt("label", {}), _wizard_cancel_kb())
+        await _edit(chat_id, message_id, _wizard_prompt("label", {}), _wizard_label_kb())
         return
 
     if data == "w:cancel":
@@ -855,6 +1443,12 @@ async def _handle_callback(cb: dict):
 
         step = pending["step"]
         wdata = pending["data"]
+
+        if data == "w:autolabel" and step == "label":
+            wdata["label"] = auto_display_name()
+            pending["step"] = "protocol"
+            await _edit(chat_id, message_id, f"🎲 اسم: <b>{_h(wdata['label'])}</b>\n\n" + _wizard_prompt("protocol", wdata), _wizard_protocol_kb())
+            return
 
         if data.startswith("w:proto:") and step == "protocol":
             proto = data.split(":", 2)[2]
@@ -929,6 +1523,7 @@ async def _handle_callback(cb: dict):
             )
             _pending.pop(chat_id, None)
             await _edit(chat_id, message_id, f"✅ کانفیگ ساخته شد.\n\n{_format_detail(uid, link)}", _link_detail_kb(uid, link["active"]))
+            await _send_link_card(chat_id, uid, link)
             return
 
         # هیچ‌کدوم از حالت‌های بالا مچ نشد (مثلاً روی دکمه‌ی مرحله‌ی قبلی که دیگه معتبر نیست زده)
@@ -959,16 +1554,7 @@ async def _handle_callback(cb: dict):
         if not l:
             await _answer_cb(cb_id, "کانفیگ پیدا نشد")
             return
-        host = get_host()
-        vless = vless_link_for_link(l, uid, host)
-        sub_url = f"https://{host}/subscription/{uid}"
-        msg = f"🔗 لینک اتصال «{_h(l.get('label'))}»:\n\n<code>{vless}</code>\n\nلینک ساب ساده (فقط متن کانفیگ):\n<code>{sub_url}</code>"
-        sid = l.get("sub_id")
-        if sid and sid in SUBS:
-            msg += f"\n\n✨ لینک ساب حرفه‌ای گروه «{_h(SUBS[sid].get('name','?'))}»:\n<code>{_group_public_url(SUBS[sid])}</code>"
-        else:
-            msg += "\n\nℹ️ این کانفیگ توی هیچ گروهی نیست. برای گرفتن لینک ساب حرفه‌ای، از دکمه‌ی «🗂 گروه ساب» توی صفحه‌ی کانفیگ استفاده کن."
-        await _send(chat_id, msg)
+        await _send_link_card(chat_id, uid, l)
         return
 
     if data.startswith("del:"):
@@ -1008,16 +1594,21 @@ async def _handle_callback(cb: dict):
         return
 
     if data.startswith("delclient:"):
-        _, uid, cid = data.split(":", 2)
+        cid = data.split(":", 1)[1]
         child = LINKS.get(cid)
-        if not child or child.get("parent_inbound_id") != uid:
-            await _edit(chat_id, message_id, "این کاربر دیگه وجود نداره.", _clients_list_kb(uid, 0))
+        uid = (child or {}).get("parent_inbound_id")
+        if not child or not uid:
+            await _edit(chat_id, message_id, "این کاربر دیگه وجود نداره.", _main_menu_kb())
             return
         await _edit(chat_id, message_id, f"❗️ از حذف کاربر «{_h(child.get('label'))}» مطمئنی؟", _confirm_delete_client_kb(uid, cid))
         return
 
     if data.startswith("delclientok:"):
-        _, uid, cid = data.split(":", 2)
+        cid = data.split(":", 1)[1]
+        uid = (LINKS.get(cid) or {}).get("parent_inbound_id")
+        if not uid:
+            await _edit(chat_id, message_id, "این کاربر قبلاً حذف شده بود.", _main_menu_kb())
+            return
         try:
             await remove_inbound_client(uid, cid)
             await _edit(chat_id, message_id, "🗑 کاربر حذف شد.", _clients_list_kb(uid, 0))
@@ -1065,6 +1656,7 @@ async def _handle_callback(cb: dict):
                 return
             _pending.pop(chat_id, None)
             await _edit(chat_id, message_id, f"✅ کاربر جدید ساخته شد.\n\n{_format_detail(cid, child)}", _link_detail_kb(cid, child["active"]))
+            await _send_link_card(chat_id, cid, child)
             return
 
         await _edit(chat_id, message_id, "این مرحله دیگه معتبر نیست.", _main_menu_kb())
@@ -1123,10 +1715,17 @@ async def start_bot():
     await _call("deleteWebhook", drop_pending_updates=False)
     _running = True
     _poll_task = asyncio.create_task(_poll_loop())
+    global _alert_task
+    _alert_task = asyncio.create_task(_alert_loop())
+    await _call("setMyCommands", commands=[{"command": c, "description": d} for c, d in BOT_COMMANDS])
 
 async def stop_bot():
     global _running, _client, _poll_task
     _running = False
+    global _alert_task
+    if _alert_task:
+        _alert_task.cancel()
+        _alert_task = None
     if _poll_task:
         _poll_task.cancel()
         _poll_task = None
