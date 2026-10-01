@@ -3810,6 +3810,301 @@ async def tcp_ping(request: Request, _=Depends(require_auth)):
         return {"ok": False, "host": host, "port": port, "latency_ms": round((time.perf_counter()-started)*1000, 1), "message": f"اتصال ناموفق: {type(exc).__name__}: {str(exc)[:180]}"}
 
 
+# ═══════════════ Telegram Mini App (روی آدرس خود پنل: /app) ═══════════════
+TMA_HTML = r"""<!doctype html><html lang="fa" dir="rtl" translate="no" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><meta name="google" content="notranslate"><title>VodiWalker</title>
+<link rel="stylesheet" href="/assets/ui.css"><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/assets/qr.js"></script>
+<style>
+:root{--bg:#080b14;--panel:#0f1420;--panel2:#141a2b;--line:#212a40;--line2:#2c3752;--accent:#9b5cff;--accent2:#37d6ff;--accent-d:#7b3ff0;--good:#22c58b;--warn:#f5a524;--bad:#f24955;--text:#eef1fb;--sub:#8b95b3;--sub2:#5c6786}
+[data-theme=light]{--bg:#f4f5fa;--panel:#fff;--panel2:#f7f8fb;--line:#e5e7eb;--line2:#d1d5db;--accent:#7c3aed;--accent2:#0ea5c4;--accent-d:#6425d6;--good:#17a673;--warn:#c9820a;--bad:#e0324a;--text:#191c2b;--sub:#666f8a;--sub2:#98a1b8}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0}body{background:radial-gradient(60% 26% at 85% -4%,rgba(155,92,255,.22),transparent 70%),radial-gradient(50% 24% at 0 8%,rgba(55,214,255,.10),transparent 70%),var(--bg);color:var(--text);font-family:Vazirmatn,Tahoma,sans-serif;min-height:100dvh;line-height:1.7;padding-bottom:calc(84px + env(safe-area-inset-bottom,0))}
+.top{position:sticky;top:0;z-index:10;background:var(--panel);padding:calc(8px + env(safe-area-inset-top,0)) 12px 10px;border-bottom:1px solid var(--line)}.top:after{content:"";position:absolute;inset:auto 0 -1px;height:1px;background:linear-gradient(90deg,transparent,rgba(155,92,255,.6),rgba(55,214,255,.6),transparent)}
+.hd{display:flex;align-items:center;gap:10px}.lg{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;font-size:19px;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 0 2px rgba(155,92,255,.3)}.hd b{font-size:15px;flex:1}.hd small{display:block;font-size:10px;color:var(--sub);font-weight:500}
+.ib{width:36px;height:36px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);display:grid;place-items:center;font-size:17px;padding:0}
+.sr{position:relative;margin-top:10px}.sr i{position:absolute;top:50%;transform:translateY(-50%);inset-inline-start:12px;color:var(--sub2);font-size:17px}.sr input{padding-inline-start:38px;margin:0}
+.w{padding:12px}.card{position:relative;overflow:hidden;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px}.card:before{content:"";position:absolute;top:0;left:16px;right:16px;height:2px;border-radius:0 0 3px 3px;background:linear-gradient(90deg,var(--accent),var(--accent2));opacity:.55}
+h2{font-size:13px;margin:16px 2px 8px;display:flex;align-items:center;gap:7px;color:var(--sub);font-weight:800}h2 i{color:var(--accent)}
+.hero b{display:block;font-size:26px;font-weight:800;direction:ltr;text-align:right;background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}.hero small{color:var(--sub);font-size:11px}
+.sg{display:grid;grid-template-columns:1fr 1fr;gap:10px}.sc{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px 14px}.sc .t{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}.sc .ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;font-size:16px}.sc b{font-size:21px;font-weight:800;direction:ltr;display:block}.sc small{font-size:11px;color:var(--sub)}
+button,.btn{font:600 12.5px Vazirmatn,Tahoma,sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--text);cursor:pointer;transition:background .14s,border-color .14s}button:active{transform:scale(.97)}.pr{background:var(--accent);border-color:var(--accent);color:#fff}.dg{color:var(--bad);border-color:rgba(242,73,85,.3)}
+input,select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:11px;font:16px Vazirmatn,sans-serif;margin-bottom:8px;outline:0}input:focus{border-color:var(--accent)}.rw{display:flex;gap:8px;flex-wrap:wrap}.rw>*{flex:1}.q6{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.it{position:relative;display:flex;align-items:center;gap:11px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:8px;cursor:pointer}.it:hover{border-color:var(--line2)}.av{position:relative;width:40px;height:40px;flex:none;border-radius:11px;display:grid;place-items:center;font-size:19px;color:var(--accent);background:rgba(155,92,255,.12);border:1px solid rgba(155,92,255,.3)}.av:after{content:"";position:absolute;bottom:-3px;inset-inline-end:-3px;width:11px;height:11px;border-radius:50%;border:2px solid var(--panel);background:var(--sub2)}.av.on:after{background:var(--good)}.av.off:after{background:var(--bad)}
+.n{flex:1;min-width:0}.n b{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:ltr;text-align:right;unicode-bidi:plaintext}.n small{color:var(--sub);font-size:10.5px}.bar{height:5px;border-radius:9px;background:var(--line);overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.bg{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:99px;font-size:10.5px;font-weight:700}.gr{background:rgba(34,197,139,.14);color:var(--good)}.rd{background:rgba(242,73,85,.14);color:var(--bad)}.or{background:rgba(245,165,36,.14);color:var(--warn)}.gy{background:rgba(135,146,168,.14);color:var(--sub)}
+.fl{display:flex;gap:6px;overflow-x:auto;margin-bottom:10px;scrollbar-width:none}.fl::-webkit-scrollbar{display:none}.ch{flex:none;border-radius:99px;padding:6px 13px}.ch.on{background:linear-gradient(120deg,var(--accent-d),var(--accent));border-color:transparent;color:#fff}
+nav{position:fixed;inset:auto 0 0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom,0));z-index:9}nav a{flex:1;text-align:center;font-size:10.5px;color:var(--sub);padding:6px 0;border-radius:10px;font-weight:700}nav a i{display:block;font-size:21px}nav a.on{color:var(--accent);background:rgba(155,92,255,.12)}
+.sh{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:20}.sh.on{display:flex}.sh>div{width:100%;max-height:90dvh;overflow:auto;background:var(--panel);border-radius:20px 20px 0 0;padding:10px 14px calc(18px + env(safe-area-inset-bottom,0));border-top:1px solid var(--line2)}.sh>div:before{content:"";display:block;width:40px;height:4px;border-radius:9px;background:var(--line2);margin:0 auto 12px}
+.q{width:190px;height:190px;background:#fff;padding:8px;border-radius:12px;margin:8px auto;display:block}.u{font:11px ui-monospace,monospace;direction:ltr;word-break:break-all;background:var(--panel2);border:1px dashed var(--line2);padding:9px;border-radius:10px;color:var(--accent2);margin:6px 0}
+#tt{position:fixed;top:14px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line2);padding:9px 16px;border-radius:99px;font-size:12px;z-index:50;display:none;box-shadow:0 14px 34px rgba(0,0,0,.4)}.em{text-align:center;color:var(--sub);padding:30px 10px;font-size:12.5px}
+
+/* ══════ Mini App · Pro UI layer (design system v2) ══════ */
+:root{--r-lg:18px;--r-md:14px;--r-sm:10px;--shadow:0 12px 32px -14px rgba(0,0,0,.55);--ease:cubic-bezier(.22,.8,.24,1);--accent-rgb:155,92,255}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{font-feature-settings:"tnum" 1;padding-bottom:calc(86px + env(safe-area-inset-bottom,0));-webkit-font-smoothing:antialiased}
+button,.it,.ch,nav a,.ib,.pr{-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform .16s var(--ease),background-color .18s,border-color .18s,box-shadow .2s,filter .16s}
+button:active,.it:active,.ch:active,.ib:active,.pr:active{transform:scale(.965)}
+button:focus,button:focus-visible,.it:focus,.ch:focus,a:focus,input:focus,select:focus{outline:none}
+button:focus-visible,.it:focus-visible{box-shadow:0 0 0 3px rgba(var(--accent-rgb),.35)}
+button:hover:not(.pr):not(.ch),.it:hover{border-color:var(--accent)}
+input:focus,select:focus{border-color:var(--accent)!important;box-shadow:0 0 0 3px rgba(var(--accent-rgb),.2)!important}
+.pr,button.pr{background:linear-gradient(135deg,var(--accent),var(--accent-d))!important;border-color:transparent!important;color:#fff!important;box-shadow:0 10px 22px -12px var(--accent);font-weight:700}
+.pr:active{filter:brightness(.92)}
+
+/* header */
+.top{backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);background:color-mix(in srgb,var(--panel) 82%,transparent);border-bottom:1px solid var(--line);padding-bottom:12px}
+.hd b{display:flex;flex-direction:column;flex:1;line-height:1.25;font-size:15px;letter-spacing:.2px}
+.hd b small{font-size:10.5px;color:var(--sub);font-weight:600;margin-top:1px}
+.lg{width:40px;height:40px;border-radius:13px;box-shadow:0 8px 20px -8px var(--accent),inset 0 1px 0 rgba(255,255,255,.35)}
+.ib{width:38px;height:38px;border-radius:12px}
+.sr input{border-radius:13px;background:var(--panel2);height:42px;font-size:14px}
+
+/* hero + stat tiles */
+.card{border-radius:var(--r-lg);box-shadow:var(--shadow);border-color:var(--line)}
+.hero{padding:20px 18px;background:radial-gradient(120% 140% at 100% 0,rgba(var(--accent-rgb),.28),transparent 60%),radial-gradient(90% 120% at 0 100%,rgba(55,214,255,.12),transparent 60%),var(--panel)}
+.hero small{letter-spacing:.3px;opacity:.85}
+.hero b{font-size:34px;letter-spacing:-.5px;margin:6px 0 8px}
+.sg{gap:10px}
+.sc{border-radius:var(--r-md);padding:14px;position:relative;overflow:hidden;box-shadow:var(--shadow)}
+.sc:after{content:"";position:absolute;inset:auto -20px -24px auto;width:70px;height:70px;border-radius:50%;background:radial-gradient(circle,rgba(var(--accent-rgb),.14),transparent 70%)}
+.sc .ic{width:34px;height:34px;border-radius:11px;font-size:18px}
+.sc b{font-size:21px;display:block;margin-top:8px;font-weight:800;letter-spacing:-.2px}
+.sc small{color:var(--sub);font-size:11px}
+h2{font-size:12.5px;text-transform:none;letter-spacing:.2px;margin:20px 4px 10px}
+
+/* list rows */
+.it{border-radius:var(--r-md);padding:13px;box-shadow:var(--shadow);overflow:hidden}
+.it:before{content:"";position:absolute;inset-block:12px;inset-inline-start:0;width:3px;border-radius:0 3px 3px 0;background:var(--line2)}
+.it:has(.av.on):before{background:var(--good)}
+.it:has(.av.off):before{background:var(--bad)}
+.av{width:42px;height:42px;border-radius:13px}
+.n b{font-size:13.5px}
+.bg{font-weight:700;letter-spacing:.1px}
+
+/* filter chips */
+.fl{padding:2px 1px 4px;margin-inline:-2px}
+.ch{border-radius:99px;padding:8px 15px;font-weight:700;font-size:12px}
+.ch.on{background:linear-gradient(120deg,var(--accent),var(--accent-d))!important;border-color:transparent!important;color:#fff!important;box-shadow:0 8px 18px -10px var(--accent)}
+
+/* floating pill nav */
+nav{inset:auto 12px calc(10px + env(safe-area-inset-bottom,0));border:1px solid var(--line2);border-radius:22px;padding:6px;gap:2px;background:color-mix(in srgb,var(--panel) 86%,transparent);backdrop-filter:blur(20px) saturate(1.5);-webkit-backdrop-filter:blur(20px) saturate(1.5);box-shadow:0 18px 40px -14px rgba(0,0,0,.65)}
+nav a{border-radius:16px;padding:8px 2px 7px;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--sub);font-weight:700}
+nav a i{font-size:20px}
+nav a.on{color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-d));box-shadow:0 10px 20px -10px var(--accent)}
+
+/* bottom sheet + toast */
+.sh{backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);background:rgba(0,0,0,.55)}
+.sh.on>div{animation:sheetUp .28s var(--ease)}
+.sh>div{border-radius:26px 26px 0 0;box-shadow:0 -20px 50px -20px rgba(0,0,0,.6)}
+@keyframes sheetUp{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
+#tt{border-radius:99px;border-color:rgba(var(--accent-rgb),.5);box-shadow:0 14px 34px -10px rgba(0,0,0,.6),0 0 0 3px rgba(var(--accent-rgb),.12);font-weight:700;top:calc(12px + env(safe-area-inset-top,0))}
+.u{border-radius:12px}
+.q{box-shadow:0 12px 30px -12px rgba(0,0,0,.5)}
+
+/* loading skeleton + entrance */
+.sk{height:78px;border-radius:var(--r-md);margin-bottom:10px;background:linear-gradient(100deg,var(--panel) 30%,var(--panel2) 50%,var(--panel) 70%);background-size:220% 100%;animation:sk 1.3s linear infinite;border:1px solid var(--line)}
+.sk.h{height:128px;border-radius:var(--r-lg)}
+@keyframes sk{from{background-position:120% 0}to{background-position:-100% 0}}
+#v>*{animation:rise .32s var(--ease) both}
+#v>*:nth-child(2){animation-delay:.04s}#v>*:nth-child(3){animation-delay:.08s}#v>*:nth-child(4){animation-delay:.12s}
+@keyframes rise{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style></head><body>
+<div class="top"><div class="hd"><div class="lg"><i class="ti ti-shield-check"></i></div><b>VodiWalker<small>Control Center · مینی‌اپ</small></b><button class="ib" onclick="th()"><i class="ti ti-moon"></i></button><button class="ib" onclick="load(1)"><i class="ti ti-refresh"></i></button></div>
+<div class="sr"><i class="ti ti-search"></i><input id="gs" placeholder="جستجو در کانفیگ‌ها، گروه‌ها و تنظیمات…" oninput="S.q=this.value;S.q?draw():draw()" autocomplete="off"></div></div>
+<div class="w" id="v"></div><nav id="nv"></nav><div class="sh" id="sh"><div id="sb"></div></div><div id="tt"></div>
+<script>
+var W=window.Telegram&&Telegram.WebApp,S={tab:'h',L:[],G:[],q:'',f:'all'},$=function(i){return document.getElementById(i)};
+if(W){W.ready();W.expand();try{if(W.colorScheme=='light')document.documentElement.dataset.theme='light'}catch(x){}}
+function th(){var r=document.documentElement;r.dataset.theme=r.dataset.theme=='dark'?'light':'dark'}
+function e(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function tt(m){var x=$('tt');x.textContent=m;x.style.display='block';clearTimeout(tt.h);tt.h=setTimeout(function(){x.style.display='none'},1800);if(W&&W.HapticFeedback)W.HapticFeedback.impactOccurred('light')}
+function api(a,b){return fetch('/api/tma/'+a,{method:'POST',headers:{'Content-Type':'application/json','X-TG-Init':W?W.initData:''},body:JSON.stringify(b||{})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw Error(j.detail||'خطا');return j})})}
+function cp(v){try{navigator.clipboard.writeText(v).then(function(){tt('کپی شد ✓')})}catch(x){var a=document.createElement('textarea');a.value=v;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();tt('کپی شد ✓')}}
+function fb(n){n=+n||0;var u=['B','KB','MB','GB','TB'],i=0;while(n>=1024&&i<4){n/=1024;i++}return(n>=10?n.toFixed(1):n.toFixed(2))+' '+u[i]}
+function qr(v){try{var q=qrcode(0,'M');q.addData(v);q.make();return'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(q.createSvgTag(5,4))}catch(x){return''}}
+function sheet(h){$('sb').innerHTML=h;$('sh').classList.add('on')}function closeS(){$('sh').classList.remove('on')}$('sh').onclick=function(x){if(x.target===this)closeS()};
+function nav(){var T=[['h','ti-layout-dashboard','داشبورد'],['c','ti-stack-2','اینباندها'],['g','ti-folders','گروه‌ها'],['r','ti-chart-bar','گزارش'],['m','ti-settings','تنظیمات']];$('nv').innerHTML=T.map(function(t){return'<a href="#" class="'+(S.tab==t[0]?'on':'')+'" onclick="go(\''+t[0]+'\');return false"><i class="ti '+t[1]+'"></i>'+t[2]+'</a>'}).join('')}
+function go(t){S.tab=t;S.q='';$('gs').value='';nav();draw()}
+function load(m){return api('state').then(function(d){S.D=d;S.L=d.links.filter(function(x){return!x.parent});S.C=d.links.filter(function(x){return x.parent});S.G=d.groups;draw();if(m)tt('بروزرسانی شد ✓')}).catch(function(x){$('v').innerHTML='<div class="card"><h2 style="margin:0 0 8px"><i class="ti ti-lock"></i> دسترسی ندارید</h2><small style="color:var(--sub)">'+e(x.message)+'<br>این مینی‌اپ فقط برای ادمین‌های ربات است.</small></div>'})}
+function st(l){return!l.active?['off','غیرفعال','gy']:(l.limit&&l.used>=l.limit)||l.days===0?['off','تمام‌شده','rd']:l.online?['on','آنلاین','gr']:['on','آماده','gy']}
+function li(l){var p=l.limit?Math.min(100,Math.round(l.used/l.limit*100)):0,s=st(l);return'<div class="it" onclick="op(\''+l.id+'\')"><div class="av '+s[0]+'"><i class="ti ti-router"></i></div><div class="n"><b>'+e(l.label)+'</b><small><span class="bg '+s[2]+'">'+s[1]+'</span> '+fb(l.used)+' / '+(l.limit?fb(l.limit):'∞')+' · '+(l.days===null?'∞':l.days+' روز')+(l.online?' · 🟢'+l.online:'')+'</small><div class="bar"><i style="width:'+(l.limit?p:100)+'%;opacity:'+(l.limit?1:.3)+'"></i></div></div><i class="ti ti-chevron-left" style="color:var(--sub2)"></i></div>'}
+function sc(i,c,v,l){return'<div class="sc"><div class="t"><div class="ic" style="background:'+c+'22;color:'+c+'"><i class="ti '+i+'"></i></div></div><b>'+v+'</b><small>'+l+'</small></div>'}
+function fl(l){var f=S.f;return f=='all'||(f=='on'&&l.active&&!(l.limit&&l.used>=l.limit))||(f=='off'&&!l.active)||(f=='net'&&l.online)||(f=='near'&&l.active&&((l.days!==null&&l.days<=3)||(l.limit&&l.used>=l.limit*.85)))}
+function draw(){var D=S.D;if(!D)return;var h='',q=S.q.trim().toLowerCase();
+if(q){var a=S.L.filter(function(l){return(l.label+' '+l.id).toLowerCase().indexOf(q)>-1}),g=S.G.filter(function(x){return x.name.toLowerCase().indexOf(q)>-1});h='<h2><i class="ti ti-search"></i> نتایج «'+e(S.q)+'»</h2>'+(a.length?a.map(li).join(''):'')+(g.length?'<h2><i class="ti ti-folders"></i> گروه‌ها</h2>'+g.map(gc).join(''):'')+((a.length||g.length)?'':'<div class="em">چیزی پیدا نشد 🔍</div>');$('v').innerHTML=h;return}
+if(S.tab=='h'){h='<div class="card hero"><small>مجموع کل ترافیک</small><b>'+fb(D.traffic)+'</b><small><span class="bg gr">● '+D.online+' آنلاین</span></small></div><div class="sg">'+sc('ti-network','#9b5cff',D.total,'کل اینباندها')+sc('ti-circle-check','#22c58b',D.active,'فعال')+sc('ti-clock-exclamation','#f5a524',D.near,'نزدیک انقضا')+sc('ti-folders','#37d6ff',S.G.length,'گروه ساب')+'</div><h2><i class="ti ti-bolt"></i> ساخت سریع (واقعی)</h2><div class="q6">'+[[10,30],[30,30],[50,30],[100,30],[200,60],[0,30]].map(function(p){return'<button class="pr" onclick="qc('+p[0]+','+p[1]+')">'+(p[0]?p[0]+' گیگ':'♾ نامحدود')+' · '+p[1]+' روز</button>'}).join('')+'</div><h2><i class="ti ti-adjustments"></i> ساخت دلخواه</h2><div class="card"><input id="cn" placeholder="اسم (Vodiwalker → Vodiwalker|Tofan🚀)"><div class="rw"><input id="cg" type="number" placeholder="حجم GB (0=∞)"><input id="cd" type="number" placeholder="روز (0=∞)"></div><button class="pr" style="width:100%" onclick="qc(+$(\'cg\').value||0,+$(\'cd\').value||0,$(\'cn\').value)"><i class="ti ti-plus"></i> ساخت اینباند</button></div><button style="width:100%" onclick="adv()"><i class="ti ti-adjustments"></i> ساخت پیشرفته (پروتکل، پورت، محدودیت IP و اتصال)</button>'}
+else if(S.tab=='c'){var F=[['all','همه'],['on','فعال'],['net','آنلاین'],['near','نزدیک انقضا'],['off','غیرفعال']];h='<div class="fl">'+F.map(function(x){return'<button class="ch '+(S.f==x[0]?'on':'')+'" onclick="S.f=\''+x[0]+'\';draw()">'+x[1]+'</button>'}).join('')+'</div>'+(S.L.filter(fl).map(li).join('')||'<div class="em">موردی نیست</div>')}
+else if(S.tab=='g'){h='<button class="pr" style="width:100%;margin-bottom:10px" onclick="gsel()"><i class="ti ti-folder-plus"></i> ساخت گروه ساب جدید</button>'+(S.G.map(gc).join('')||'<div class="em">هنوز گروهی ندارید</div>')}
+else if(S.tab=='r'){$('v').innerHTML=rp();lact();return}
+else{h='<div class="card"><b><i class="ti ti-server"></i> وضعیت سرور</b><div class="sg" style="margin-top:10px">'+sc('ti-cpu','#9b5cff',D.srv.cpu+'%','CPU')+sc('ti-device-ram','#37d6ff',D.srv.ram+'%','RAM')+sc('ti-database','#f5a524',D.srv.disk+'%','دیسک')+sc('ti-world','#22c58b','<span style="font-size:12px">'+e(D.host)+'</span>','آدرس پنل')+'</div></div><div class="card"><b><i class="ti ti-brand-telegram"></i> پشتیبانی اشتراک</b><input id="su" dir="ltr" style="margin-top:10px" placeholder="@YourSupport" value="'+e(D.support)+'"><button class="pr" style="width:100%" onclick="ss()">ذخیره آیدی پشتیبان</button></div>'}
+$('v').innerHTML=h}
+function gc(g){return'<div class="card"><b>'+e(g.name)+'</b> <span class="bg gy">'+g.count+' کانفیگ</span><div class="u">'+e(g.url)+'</div><div class="rw"><button class="pr" onclick="cp(\''+e(g.url)+'\')"><i class="ti ti-copy"></i> کپی ساب</button><button onclick="sq(\''+e(g.url)+'\')"><i class="ti ti-qrcode"></i> QR</button></div><div class="rw" style="margin-top:8px"><button onclick="gsel(\''+g.id+'\')"><i class="ti ti-edit"></i> مدیریت کانفیگ‌ها</button><button class="dg" onclick="gd(\''+g.id+'\')"><i class="ti ti-trash"></i> حذف</button></div></div>'}
+function qc(g,d,n){api('create',{gb:g,days:d,label:n||''}).then(function(r){tt('ساخته شد ✓');load().then(function(){op(r.item.id)})}).catch(function(x){tt(x.message)})}
+function op(id){var l=S.L.filter(function(x){return x.id==id})[0];if(!l)return;var s=st(l);sheet('<div class="hd"><div class="av '+s[0]+'"><i class="ti ti-router"></i></div><b style="font-size:14px;direction:ltr;text-align:right">'+e(l.label)+'</b><span class="bg '+s[2]+'">'+s[1]+'</span></div><div class="u">'+e(l.link||'—')+'</div><img class="q" src="'+qr(l.link||'')+'"><div class="rw"><button class="pr" onclick="cp(\''+e(l.link)+'\')"><i class="ti ti-copy"></i> کپی لینک</button><button onclick="cp(\''+e(l.sub)+'\')"><i class="ti ti-link"></i> کپی ساب</button></div><h2><i class="ti ti-pencil"></i> ویرایش سریع</h2><div class="q6"><button onclick="ed(\''+id+'\',\'gb\',10)">+10 GB</button><button onclick="ed(\''+id+'\',\'gb\',50)">+50 GB</button><button onclick="ed(\''+id+'\',\'d\',30)">+30 روز</button><button onclick="ed(\''+id+'\',\'d\',90)">+90 روز</button><button onclick="ed(\''+id+'\',\'reset\')"><i class="ti ti-refresh"></i> ریست مصرف</button><button onclick="ed(\''+id+'\',\'rname\')"><i class="ti ti-dice-5"></i> اسم خفن</button><button onclick="ed(\''+id+'\',\'toggle\')">'+(l.active?'⏸ غیرفعال':'▶ فعال')+'</button><button class="dg" onclick="if(confirm(\'حذف شود؟\'))ed(\''+id+'\',\'del\')"><i class="ti ti-trash"></i> حذف</button></div>'+cl(l))}
+function ed(id,k,v){api('edit',{id:id,op:k,v:v}).then(function(){tt('انجام شد ✓');closeS();load().then(function(){if(k!='del')op(id)})}).catch(function(x){tt(x.message)})}
+function sq(u){sheet('<img class="q" src="'+qr(u)+'"><div class="u">'+e(u)+'</div><button class="pr" style="width:100%" onclick="cp(\''+e(u)+'\')">کپی</button>')}
+function mg(){api('group',{name:$('gn').value}).then(function(){tt('گروه ساخته شد ✓');load()}).catch(function(x){tt(x.message)})}
+function ss(){api('support',{v:$('su').value}).then(function(){tt('ذخیره شد ✓');load()}).catch(function(x){tt(x.message)})}
+
+function ER(x){tt(x.message)}
+function rp(){var t=S.L.slice().sort(function(a,b){return b.used-a.used}).slice(0,8),mx=(t[0]&&t[0].used)||1;return'<h2><i class="ti ti-flame"></i> پرمصرف‌ترین‌ها</h2><div class="card">'+(t.map(function(l){return'<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between"><small style="direction:ltr">'+e(l.label)+'</small><small>'+fb(l.used)+'</small></div><div class="bar"><i style="width:'+Math.round(l.used/mx*100)+'%"></i></div></div>'}).join('')||'<div class="em">داده‌ای نیست</div>')+'</div><h2><i class="ti ti-activity"></i> فعالیت‌های اخیر</h2><div class="card" id="ac"><div class="em">در حال بارگذاری…</div></div>'}
+function lact(){api('activity').then(function(r){$('ac').innerHTML=r.logs.map(function(x){return'<div style="padding:8px 0;border-bottom:1px solid var(--line);font-size:11.5px"><span class="bg '+(x.level=='error'?'rd':x.level=='warning'?'or':'gy')+'">'+e(x.kind)+'</span> '+e(x.message)+'<br><small style="color:var(--sub2)">'+e(String(x.time).slice(5,16).replace('T',' '))+'</small></div>'}).join('')||'<div class="em">فعالیتی ثبت نشده</div>'}).catch(function(){})}
+function adv(){sheet('<h2 style="margin-top:0"><i class="ti ti-adjustments"></i> ساخت پیشرفته</h2><input id="an" placeholder="اسم"><select id="ap">'+S.D.protocols.map(function(p){return'<option>'+e(p)+'</option>'}).join('')+'</select><div class="rw"><input id="ag" type="number" placeholder="حجم GB (0=∞)"><input id="ad" type="number" placeholder="روز (0=∞)"></div><div class="rw"><input id="ao" type="number" placeholder="پورت (443)"><input id="ai" type="number" placeholder="محدودیت IP (0=∞)" value="0"></div><div class="rw"><input id="ak" type="number" placeholder="اتصال هم‌زمان (0=∞)"><input id="ae" placeholder="یادداشت"></div><button class="pr" style="width:100%" onclick="av()">ساخت</button>')}
+function av(){api('create',{label:$('an').value,protocol:$('ap').value,gb:+$('ag').value||0,days:+$('ad').value||0,port:+$('ao').value||0,ip:+$('ai').value||0,conn:+$('ak').value||0,note:$('ae').value}).then(function(r){closeS();tt('ساخته شد ✓');load().then(function(){op(r.item.id)})}).catch(ER)}
+function cl(l){var c=S.C.filter(function(x){return x.parent==l.id});return'<h2><i class="ti ti-users"></i> کلاینت‌ها ('+c.length+')</h2>'+c.map(function(x){return'<div class="it" style="cursor:default"><div class="n"><b>'+e(x.label)+'</b><small>'+fb(x.used)+' / '+(x.limit?fb(x.limit):'∞')+'</small></div><button onclick="cp(\''+e(x.link)+'\')"><i class="ti ti-copy"></i></button><button class="dg" onclick="if(confirm(\'حذف؟\'))ed(\''+x.id+'\',\'del\')"><i class="ti ti-trash"></i></button></div>'}).join('')+'<div class="card"><input id="cn_" placeholder="نام کلاینت جدید"><div class="rw"><input id="cg_" type="number" placeholder="GB"><input id="cd_" type="number" placeholder="روز"></div><button class="pr" style="width:100%" onclick="ac_(\''+l.id+'\')"><i class="ti ti-user-plus"></i> افزودن کلاینت</button></div>'}
+function ac_(id){api('client_add',{id:id,label:$('cn_').value,gb:+$('cg_').value||0,days:+$('cd_').value||0}).then(function(){tt('کلاینت ساخته شد ✓');load().then(function(){op(id)})}).catch(ER)}
+function gsel(gid){var g=gid?S.G.filter(function(x){return x.id==gid})[0]:null,sel=g?g.ids:[];sheet('<h2 style="margin-top:0"><i class="ti ti-folders"></i> '+(g?'مدیریت «'+e(g.name)+'»':'گروه ساب جدید')+'</h2>'+(g?'':'<input id="gn" placeholder="نام گروه"><input id="gp" placeholder="رمز (اختیاری)">')+'<div style="max-height:46dvh;overflow:auto">'+S.L.map(function(l){return'<label class="it"><input type="checkbox" class="gk" value="'+l.id+'" '+(sel.indexOf(l.id)>-1?'checked':'')+' style="width:20px;margin:0"><div class="n"><b>'+e(l.label)+'</b></div></label>'}).join('')+'</div><button class="pr" style="width:100%;margin-top:8px" onclick="gs_(\''+(gid||'')+'\')">ذخیره</button>')}
+function gs_(gid){var ids=[].slice.call(document.querySelectorAll('.gk:checked')).map(function(x){return x.value});api(gid?'group_set':'group_create',{gid:gid,name:$('gn')?$('gn').value:'',password:$('gp')?$('gp').value:'',ids:ids}).then(function(){closeS();tt('ذخیره شد ✓');load()}).catch(ER)}
+function gd(id){if(confirm('گروه حذف شود؟'))api('group_del',{gid:id}).then(function(){tt('حذف شد');load()}).catch(ER)}
+$('v').innerHTML='<div class="sk h"></div><div class="sk"></div><div class="sk"></div>';try{if(W){W.setHeaderColor(getComputedStyle(document.body).backgroundColor);W.setBackgroundColor(getComputedStyle(document.body).backgroundColor)}}catch(x){}
+nav();load();setInterval(function(){if(!$('sh').classList.contains('on')&&document.activeElement.tagName!='INPUT')load()},30000);
+</script></body></html>
+"""
+
+
+def _tma_admin(request: Request) -> int:
+    """اعتبارسنجی initData تلگرام (HMAC با توکن ربات) + فقط ادمین‌های ربات."""
+    import hmac
+    from urllib.parse import parse_qsl
+    import telegram_bot as _tb
+    cfg = _tb.current_config()
+    token = cfg.get("bot_token") or ""
+    raw = request.headers.get("x-tg-init", "")
+    try:
+        pairs = dict(parse_qsl(raw, keep_blank_values=True))
+        got = pairs.pop("hash", "")
+        check = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+        secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+        ok = bool(token) and hmac.compare_digest(hmac.new(secret, check.encode(), hashlib.sha256).hexdigest(), got)
+        if not ok or time.time() - int(pairs.get("auth_date", "0")) > 86400:
+            raise ValueError
+        uid = int(json.loads(pairs["user"])["id"])
+    except Exception:
+        raise HTTPException(status_code=401, detail="احراز هویت تلگرام نامعتبر است")
+    if uid not in {int(x) for x in str(cfg.get("admin_ids", "")).split(",") if x.strip().isdigit()}:
+        raise HTTPException(status_code=403, detail="شما ادمین ربات نیستید")
+    return uid
+
+
+def _tma_item(request: Request, uid: str, l: dict, host: str) -> dict:
+    exp = l.get("expires_at")
+    try:
+        days = max(0, int((datetime.fromisoformat(str(exp)) - datetime.now()).total_seconds() // 86400)) if exp else None
+    except Exception:
+        days = None
+    return {
+        "id": uid, "label": l.get("label", "?"), "active": bool(l.get("active", True)),
+        "used": int(l.get("used_bytes") or 0), "limit": int(l.get("limit_bytes") or 0), "days": days,
+        "online": len(unique_ips_for_uuid(uid)),
+        "link": vless_link_for_link(l, uid, host), "sub": f"{get_scheme()}://{host}/sub/{uid}",
+        "parent": l.get("parent_inbound_id"), "port": l.get("port"), "protocol": l.get("protocol"),
+    }
+
+
+@app.get("/app", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/miniapp", response_class=HTMLResponse, include_in_schema=False)
+async def tma_page():
+    return HTMLResponse(TMA_HTML, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/tma/{action}", include_in_schema=False)
+async def tma_api(action: str, request: Request):
+    _tma_admin(request)
+    try:
+        b = await request.json()
+    except Exception:
+        b = {}
+    host = get_host(request)
+    if action == "create":
+        gb, days = float(b.get("gb") or 0), int(b.get("days") or 0)
+        label = decorate_label(sanitize_display_name(str(b.get("label")))) if str(b.get("label") or "").strip() else auto_display_name()
+        proto = str(b.get("protocol") or "")
+        if proto not in LIVE_PROTOCOLS:
+            proto = "vless-ws" if "vless-ws" in LIVE_PROTOCOLS else DEFAULT_PROTOCOL
+        uid, link = await make_link(
+            label=label, limit_bytes=int(parse_size_to_bytes(gb, "GB")) if gb > 0 else 0,
+            expires_at=(datetime.now() + timedelta(days=days)).isoformat() if days > 0 else None,
+            protocol=proto, port=max(1, min(65535, int(b.get("port") or DEFAULT_PORT))),
+            ip_limit=max(0, int(b.get("ip") or 0)), connection_limit=max(0, int(b.get("conn") or 0)),
+            note=str(b.get("note") or "")[:200],
+        )
+        return {"ok": True, "item": _tma_item(request, uid, link, host)}
+    if action == "edit":
+        uid, op, v = str(b.get("id")), b.get("op"), b.get("v")
+        if uid not in LINKS:
+            raise HTTPException(status_code=404, detail="کانفیگ پیدا نشد")
+        if op == "del":
+            await remove_link(uid)
+        elif op == "toggle":
+            await set_link_active(uid, not LINKS[uid].get("active", True))
+        elif op == "gb":
+            if not int(LINKS[uid].get("limit_bytes") or 0):
+                raise HTTPException(status_code=400, detail="حجم این کانفیگ نامحدود است")
+            await update_link_fields(uid, add_bytes=int(parse_size_to_bytes(float(v), "GB")))
+        elif op == "d":
+            await update_link_fields(uid, extend_days=int(v))
+        elif op == "reset":
+            await update_link_fields(uid, reset_usage=True)
+        elif op == "rname":
+            await update_link_fields(uid, label=auto_display_name())
+        return {"ok": True}
+    if action == "client_add":
+        gb = float(b.get("gb") or 0)
+        lab = str(b.get("label") or "").strip()
+        res = await add_client_to_inbound(
+            str(b.get("id")), label=decorate_label(sanitize_display_name(lab)) if lab else None,
+            limit_bytes=int(parse_size_to_bytes(gb, "GB")) if gb > 0 else None, expires_days=int(b.get("days") or 0),
+        )
+        if not res:
+            raise HTTPException(status_code=400, detail="ساخت کلاینت ممکن نیست")
+        return {"ok": True}
+    if action in ("group", "group_create"):
+        name = sanitize_display_name(str(b.get("name") or "")) or "VodiWalker"
+        sid, _s = await create_sub_group(name=name, password=str(b.get("password") or ""))
+        ids = b.get("ids") or [u for u, l in LINKS.items() if l.get("active", True) and not l.get("parent_inbound_id")]
+        for u in ids:
+            await set_link_sub(str(u), sid)
+        return {"ok": True}
+    if action == "group_set":
+        gid = str(b.get("gid"))
+        if gid not in SUBS:
+            raise HTTPException(status_code=404, detail="گروه پیدا نشد")
+        want = {str(x) for x in (b.get("ids") or [])}
+        for u in list(SUBS[gid].get("link_ids") or []):
+            if u not in want:
+                await set_link_sub(u, None)
+        for u in want:
+            await set_link_sub(u, gid)
+        return {"ok": True}
+    if action == "group_del":
+        if await remove_sub_group(str(b.get("gid"))) is None:
+            raise HTTPException(status_code=404, detail="گروه پیدا نشد")
+        return {"ok": True}
+    if action == "activity":
+        return {"logs": list(activity_logs)[-80:][::-1]}
+    if action == "support":
+        v = _clean_tg_username(b.get("v"))
+        if v and not _TG_USER_RE.match(v):
+            raise HTTPException(status_code=400, detail="آیدی تلگرام معتبر نیست")
+        CONFIG["support_username"] = v
+        await save_state()
+        return {"ok": True}
+    if action != "state":
+        raise HTTPException(status_code=404, detail="unknown")
+    import psutil
+    items = sorted((_tma_item(request, u, l, host) for u, l in LINKS.items()), key=lambda x: x["label"])
+    base = get_public_base(request) or f"{get_scheme()}://{host}"
+    return {
+        "links": items, "total": len(items), "active": sum(1 for i in items if i["active"]),
+        "near": sum(1 for i in items if i["active"] and ((i["days"] is not None and i["days"] <= 3) or (i["limit"] and i["used"] >= i["limit"] * .85))),
+        "traffic": sum(i["used"] for i in items), "online": sum(i["online"] for i in items),
+        "protocols": sorted(LIVE_PROTOCOLS),
+        "groups": [{"id": sid_, "ids": list(s.get("link_ids") or []), "name": s.get("name", "?"), "count": len(s.get("link_ids") or []), "url": f"{base}/p/{s.get('uuid_key', '')}"} for sid_, s in SUBS.items()],
+        "srv": {"cpu": psutil.cpu_percent(), "ram": psutil.virtual_memory().percent, "disk": psutil.disk_usage("/").percent},
+        "host": host, "support": get_support_username(),
+    }
+
+
+
 @app.get("/api/name-suggestions")
 async def api_name_suggestions(request: Request, _=Depends(require_auth)):
     base = request.query_params.get("base", "")
