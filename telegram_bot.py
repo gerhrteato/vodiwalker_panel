@@ -202,15 +202,19 @@ def _tma_url():
 
 
 async def _set_menu_button():
-    url = _tma_url()
-    if url:
-        await _call("setChatMenuButton", menu_button={"type": "web_app", "text": "🚀 مینی‌اپ", "web_app": {"url": url}})
+    # دکمه‌ی منوی پیش‌فرض = مینی‌اپ مشتری؛ برای هر ادمین (چت خودش) = مینی‌اپ ادمین
+    base = get_public_base()
+    if base and base.startswith("https://"):
+        await _call("setChatMenuButton", menu_button={"type": "web_app", "text": "🚀 مینی‌اپ", "web_app": {"url": f"{base}/tma/shop"}})
+        for aid in ADMIN_IDS:
+            await _call("setChatMenuButton", chat_id=aid, menu_button={"type": "web_app", "text": "🛠 ادمین", "web_app": {"url": f"{base}/tma/admin"}})
 
 
 def _main_menu_kb():
     _tma = _tma_url()
     return {"inline_keyboard": [
-        *([[{"text": "🚀 باز کردن مینی‌اپ VodiWalker", "web_app": {"url": _tma}}]] if _tma else []),
+        *__import__("shop").admin_rows(),
+        *([[{"text": "🧰 مینی‌اپ کانفیگ‌ها (قدیمی)", "web_app": {"url": _tma}}]] if _tma else []),
         [{"text": "⚡ ساخت سریع کانفیگ", "callback_data": "quick"}, {"text": "🧩 ساخت پیشرفته", "callback_data": "newcfg"}],
         [{"text": "📋 لیست کانفیگ‌ها", "callback_data": "list:0"}, {"text": "🗂 گروه‌های ساب", "callback_data": "subs:0"}],
         [{"text": "🟢 آنلاین‌ها", "callback_data": "online"}, {"text": "🔥 پرمصرف‌ها", "callback_data": "top"}, {"text": "⏳ نزدیک انقضا", "callback_data": "expiring"}],
@@ -1003,7 +1007,12 @@ async def _handle_message(msg: dict):
 
     # این ربات فقط برای مدیریت پنل است؛ فقط ادمین‌های مجاز (TELEGRAM_ADMIN_IDS)
     # اجازه‌ی استفاده دارند.
+    import shop as _shop
+    if msg.get("successful_payment"):
+        await _shop.bot_paid(msg)
+        return
     if not _is_admin(chat_id):
+        await _shop.bot_message(msg)   # مشتری عادی: منوی فروش + تست رایگان
         return
 
     if cmd in ("/new", "/quick"):
@@ -1218,8 +1227,11 @@ async def _handle_callback(cb: dict):
         return
 
     # ربات فقط برای مدیریت پنل است؛ فقط ادمین‌ها دسترسی دارند.
-    if not _is_admin(chat_id):
+    import shop as _shop
+    if data.startswith("c:") or not _is_admin(chat_id):
         await _answer_cb(cb_id)
+        if data.startswith("c:"):
+            await _shop.bot_callback(cb)
         return
     await _answer_cb(cb_id)
 
@@ -1685,7 +1697,7 @@ async def _poll_loop():
     logger.info(f"🤖 Telegram bot polling started (admins: {len(ADMIN_IDS)})")
     while _running:
         try:
-            res = await _call("getUpdates", offset=offset, timeout=30, allowed_updates=["message", "callback_query"])
+            res = await _call("getUpdates", offset=offset, timeout=30, allowed_updates=["message", "callback_query", "pre_checkout_query"])
             if not res or not res.get("ok"):
                 # علت شایع‌ترین «ربات جواب نمی‌ده»: یک وبهوک قبلاً روی این توکن ست شده
                 # و getUpdates با خطای 409 Conflict رد می‌شه. هر بار یه‌بار دیگه هم
@@ -1702,6 +1714,9 @@ async def _poll_loop():
                         await _handle_message(upd["message"])
                     elif "callback_query" in upd:
                         await _handle_callback(upd["callback_query"])
+                    elif "pre_checkout_query" in upd:
+                        import shop as _shop
+                        await _shop.bot_precheckout(upd["pre_checkout_query"])
                 except Exception as e:
                     logger.warning(f"Telegram update handling error: {e}")
         except asyncio.CancelledError:
