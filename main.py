@@ -9323,6 +9323,12 @@ async def global_exception_handler(
 # MAIN
 # ============================================================
 
+try:
+    import shop  # noqa: E402,F401 — فروشگاه: مینی‌اپ مشتری/ادمین، تست رایگان، Stars
+except Exception as _shop_err:
+    logger.warning(f"shop module failed to load: {_shop_err}")
+
+
 if __name__ == "__main__":
 
     uvicorn.run(
