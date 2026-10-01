@@ -196,8 +196,21 @@ def _is_admin(chat_id: int) -> bool:
     return chat_id in ADMIN_IDS
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
+def _tma_url():
+    base = get_public_base()
+    return f"{base}/app" if base and base.startswith("https://") else None
+
+
+async def _set_menu_button():
+    url = _tma_url()
+    if url:
+        await _call("setChatMenuButton", menu_button={"type": "web_app", "text": "🚀 مینی‌اپ", "web_app": {"url": url}})
+
+
 def _main_menu_kb():
+    _tma = _tma_url()
     return {"inline_keyboard": [
+        *([[{"text": "🚀 باز کردن مینی‌اپ VodiWalker", "web_app": {"url": _tma}}]] if _tma else []),
         [{"text": "⚡ ساخت سریع کانفیگ", "callback_data": "quick"}, {"text": "🧩 ساخت پیشرفته", "callback_data": "newcfg"}],
         [{"text": "📋 لیست کانفیگ‌ها", "callback_data": "list:0"}, {"text": "🗂 گروه‌های ساب", "callback_data": "subs:0"}],
         [{"text": "🟢 آنلاین‌ها", "callback_data": "online"}, {"text": "🔥 پرمصرف‌ها", "callback_data": "top"}, {"text": "⏳ نزدیک انقضا", "callback_data": "expiring"}],
@@ -864,6 +877,7 @@ async def _set_public_url(chat_id: int, raw: str):
     CONFIG["public_base_url"] = f"{scheme}://{host}"
     await save_state()
     _reach_cache["t"] = 0
+    await _set_menu_button()
     await _send(chat_id, f"✅ آدرس پنل ذخیره شد:\n<code>{scheme}://{host}</code>\nاز این به بعد همه‌ی لینک‌ها با همین آدرس واقعی ساخته می‌شن.", _main_menu_kb())
 
 
@@ -981,6 +995,8 @@ async def _handle_message(msg: dict):
     cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
     args = text.split()[1:] if cmd else []
 
+    if cmd == "/start" and _is_admin(chat_id):
+        await _set_menu_button()
     if cmd == "/id":
         await _send(chat_id, f"🆔 شناسه‌ی عددی شما: <code>{chat_id}</code>\nاین عدد رو توی تنظیمات پنل (آیدی ادمین‌ها) بذار.")
         return
@@ -1717,6 +1733,7 @@ async def start_bot():
     _poll_task = asyncio.create_task(_poll_loop())
     global _alert_task
     _alert_task = asyncio.create_task(_alert_loop())
+    await _set_menu_button()
     await _call("setMyCommands", commands=[{"command": c, "description": d} for c, d in BOT_COMMANDS])
 
 async def stop_bot():
