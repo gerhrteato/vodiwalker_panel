@@ -3981,12 +3981,7 @@ def _tma_admin(request: Request) -> int:
     except Exception:
         raise HTTPException(status_code=401, detail="احراز هویت تلگرام نامعتبر است")
     if uid not in {int(x) for x in str(cfg.get("admin_ids", "")).split(",") if x.strip().isdigit()}:
-        try:
-            import shop as _shop
-            if not _shop.is_admin(uid):
-                raise ValueError
-        except Exception:
-            raise HTTPException(status_code=403, detail="شما ادمین ربات نیستید")
+        raise HTTPException(status_code=403, detail="شما ادمین ربات نیستید")
     return uid
 
 
@@ -4008,12 +4003,7 @@ def _tma_item(request: Request, uid: str, l: dict, host: str) -> dict:
 @app.get("/app", response_class=HTMLResponse, include_in_schema=False)
 @app.get("/miniapp", response_class=HTMLResponse, include_in_schema=False)
 async def tma_page():
-    # طراحی جدید (شیشه‌ای + تم قابل تنظیم) از فایل tma_panel.html؛ اگر نبود نسخه‌ی داخلی
-    try:
-        html = (Path(__file__).parent / "tma_panel.html").read_text("utf-8")
-    except Exception:
-        html = TMA_HTML
-    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+    return HTMLResponse(TMA_HTML, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/tma/{action}", include_in_schema=False)
