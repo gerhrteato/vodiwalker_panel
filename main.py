@@ -3835,78 +3835,6 @@ nav{position:fixed;inset:auto 0 0;display:flex;background:var(--panel);border-to
 .sh{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:20}.sh.on{display:flex}.sh>div{width:100%;max-height:90dvh;overflow:auto;background:var(--panel);border-radius:20px 20px 0 0;padding:10px 14px calc(18px + env(safe-area-inset-bottom,0));border-top:1px solid var(--line2)}.sh>div:before{content:"";display:block;width:40px;height:4px;border-radius:9px;background:var(--line2);margin:0 auto 12px}
 .q{width:190px;height:190px;background:#fff;padding:8px;border-radius:12px;margin:8px auto;display:block}.u{font:11px ui-monospace,monospace;direction:ltr;word-break:break-all;background:var(--panel2);border:1px dashed var(--line2);padding:9px;border-radius:10px;color:var(--accent2);margin:6px 0}
 #tt{position:fixed;top:14px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line2);padding:9px 16px;border-radius:99px;font-size:12px;z-index:50;display:none;box-shadow:0 14px 34px rgba(0,0,0,.4)}.em{text-align:center;color:var(--sub);padding:30px 10px;font-size:12.5px}
-
-/* ══════ Mini App · Pro UI layer (design system v2) ══════ */
-:root{--r-lg:18px;--r-md:14px;--r-sm:10px;--shadow:0 12px 32px -14px rgba(0,0,0,.55);--ease:cubic-bezier(.22,.8,.24,1);--accent-rgb:155,92,255}
-html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
-body{font-feature-settings:"tnum" 1;padding-bottom:calc(86px + env(safe-area-inset-bottom,0));-webkit-font-smoothing:antialiased}
-button,.it,.ch,nav a,.ib,.pr{-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform .16s var(--ease),background-color .18s,border-color .18s,box-shadow .2s,filter .16s}
-button:active,.it:active,.ch:active,.ib:active,.pr:active{transform:scale(.965)}
-button:focus,button:focus-visible,.it:focus,.ch:focus,a:focus,input:focus,select:focus{outline:none}
-button:focus-visible,.it:focus-visible{box-shadow:0 0 0 3px rgba(var(--accent-rgb),.35)}
-button:hover:not(.pr):not(.ch),.it:hover{border-color:var(--accent)}
-input:focus,select:focus{border-color:var(--accent)!important;box-shadow:0 0 0 3px rgba(var(--accent-rgb),.2)!important}
-.pr,button.pr{background:linear-gradient(135deg,var(--accent),var(--accent-d))!important;border-color:transparent!important;color:#fff!important;box-shadow:0 10px 22px -12px var(--accent);font-weight:700}
-.pr:active{filter:brightness(.92)}
-
-/* header */
-.top{backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);background:color-mix(in srgb,var(--panel) 82%,transparent);border-bottom:1px solid var(--line);padding-bottom:12px}
-.hd b{display:flex;flex-direction:column;flex:1;line-height:1.25;font-size:15px;letter-spacing:.2px}
-.hd b small{font-size:10.5px;color:var(--sub);font-weight:600;margin-top:1px}
-.lg{width:40px;height:40px;border-radius:13px;box-shadow:0 8px 20px -8px var(--accent),inset 0 1px 0 rgba(255,255,255,.35)}
-.ib{width:38px;height:38px;border-radius:12px}
-.sr input{border-radius:13px;background:var(--panel2);height:42px;font-size:14px}
-
-/* hero + stat tiles */
-.card{border-radius:var(--r-lg);box-shadow:var(--shadow);border-color:var(--line)}
-.hero{padding:20px 18px;background:radial-gradient(120% 140% at 100% 0,rgba(var(--accent-rgb),.28),transparent 60%),radial-gradient(90% 120% at 0 100%,rgba(55,214,255,.12),transparent 60%),var(--panel)}
-.hero small{letter-spacing:.3px;opacity:.85}
-.hero b{font-size:34px;letter-spacing:-.5px;margin:6px 0 8px}
-.sg{gap:10px}
-.sc{border-radius:var(--r-md);padding:14px;position:relative;overflow:hidden;box-shadow:var(--shadow)}
-.sc:after{content:"";position:absolute;inset:auto -20px -24px auto;width:70px;height:70px;border-radius:50%;background:radial-gradient(circle,rgba(var(--accent-rgb),.14),transparent 70%)}
-.sc .ic{width:34px;height:34px;border-radius:11px;font-size:18px}
-.sc b{font-size:21px;display:block;margin-top:8px;font-weight:800;letter-spacing:-.2px}
-.sc small{color:var(--sub);font-size:11px}
-h2{font-size:12.5px;text-transform:none;letter-spacing:.2px;margin:20px 4px 10px}
-
-/* list rows */
-.it{border-radius:var(--r-md);padding:13px;box-shadow:var(--shadow);overflow:hidden}
-.it:before{content:"";position:absolute;inset-block:12px;inset-inline-start:0;width:3px;border-radius:0 3px 3px 0;background:var(--line2)}
-.it:has(.av.on):before{background:var(--good)}
-.it:has(.av.off):before{background:var(--bad)}
-.av{width:42px;height:42px;border-radius:13px}
-.n b{font-size:13.5px}
-.bg{font-weight:700;letter-spacing:.1px}
-
-/* filter chips */
-.fl{padding:2px 1px 4px;margin-inline:-2px}
-.ch{border-radius:99px;padding:8px 15px;font-weight:700;font-size:12px}
-.ch.on{background:linear-gradient(120deg,var(--accent),var(--accent-d))!important;border-color:transparent!important;color:#fff!important;box-shadow:0 8px 18px -10px var(--accent)}
-
-/* floating pill nav */
-nav{inset:auto 12px calc(10px + env(safe-area-inset-bottom,0));border:1px solid var(--line2);border-radius:22px;padding:6px;gap:2px;background:color-mix(in srgb,var(--panel) 86%,transparent);backdrop-filter:blur(20px) saturate(1.5);-webkit-backdrop-filter:blur(20px) saturate(1.5);box-shadow:0 18px 40px -14px rgba(0,0,0,.65)}
-nav a{border-radius:16px;padding:8px 2px 7px;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--sub);font-weight:700}
-nav a i{font-size:20px}
-nav a.on{color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-d));box-shadow:0 10px 20px -10px var(--accent)}
-
-/* bottom sheet + toast */
-.sh{backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);background:rgba(0,0,0,.55)}
-.sh.on>div{animation:sheetUp .28s var(--ease)}
-.sh>div{border-radius:26px 26px 0 0;box-shadow:0 -20px 50px -20px rgba(0,0,0,.6)}
-@keyframes sheetUp{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
-#tt{border-radius:99px;border-color:rgba(var(--accent-rgb),.5);box-shadow:0 14px 34px -10px rgba(0,0,0,.6),0 0 0 3px rgba(var(--accent-rgb),.12);font-weight:700;top:calc(12px + env(safe-area-inset-top,0))}
-.u{border-radius:12px}
-.q{box-shadow:0 12px 30px -12px rgba(0,0,0,.5)}
-
-/* loading skeleton + entrance */
-.sk{height:78px;border-radius:var(--r-md);margin-bottom:10px;background:linear-gradient(100deg,var(--panel) 30%,var(--panel2) 50%,var(--panel) 70%);background-size:220% 100%;animation:sk 1.3s linear infinite;border:1px solid var(--line)}
-.sk.h{height:128px;border-radius:var(--r-lg)}
-@keyframes sk{from{background-position:120% 0}to{background-position:-100% 0}}
-#v>*{animation:rise .32s var(--ease) both}
-#v>*:nth-child(2){animation-delay:.04s}#v>*:nth-child(3){animation-delay:.08s}#v>*:nth-child(4){animation-delay:.12s}
-@keyframes rise{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <div class="top"><div class="hd"><div class="lg"><i class="ti ti-shield-check"></i></div><b>VodiWalker<small>Control Center · مینی‌اپ</small></b><button class="ib" onclick="th()"><i class="ti ti-moon"></i></button><button class="ib" onclick="load(1)"><i class="ti ti-refresh"></i></button></div>
 <div class="sr"><i class="ti ti-search"></i><input id="gs" placeholder="جستجو در کانفیگ‌ها، گروه‌ها و تنظیمات…" oninput="S.q=this.value;S.q?draw():draw()" autocomplete="off"></div></div>
@@ -3955,7 +3883,6 @@ function ac_(id){api('client_add',{id:id,label:$('cn_').value,gb:+$('cg_').value
 function gsel(gid){var g=gid?S.G.filter(function(x){return x.id==gid})[0]:null,sel=g?g.ids:[];sheet('<h2 style="margin-top:0"><i class="ti ti-folders"></i> '+(g?'مدیریت «'+e(g.name)+'»':'گروه ساب جدید')+'</h2>'+(g?'':'<input id="gn" placeholder="نام گروه"><input id="gp" placeholder="رمز (اختیاری)">')+'<div style="max-height:46dvh;overflow:auto">'+S.L.map(function(l){return'<label class="it"><input type="checkbox" class="gk" value="'+l.id+'" '+(sel.indexOf(l.id)>-1?'checked':'')+' style="width:20px;margin:0"><div class="n"><b>'+e(l.label)+'</b></div></label>'}).join('')+'</div><button class="pr" style="width:100%;margin-top:8px" onclick="gs_(\''+(gid||'')+'\')">ذخیره</button>')}
 function gs_(gid){var ids=[].slice.call(document.querySelectorAll('.gk:checked')).map(function(x){return x.value});api(gid?'group_set':'group_create',{gid:gid,name:$('gn')?$('gn').value:'',password:$('gp')?$('gp').value:'',ids:ids}).then(function(){closeS();tt('ذخیره شد ✓');load()}).catch(ER)}
 function gd(id){if(confirm('گروه حذف شود؟'))api('group_del',{gid:id}).then(function(){tt('حذف شد');load()}).catch(ER)}
-$('v').innerHTML='<div class="sk h"></div><div class="sk"></div><div class="sk"></div>';try{if(W){W.setHeaderColor(getComputedStyle(document.body).backgroundColor);W.setBackgroundColor(getComputedStyle(document.body).backgroundColor)}}catch(x){}
 nav();load();setInterval(function(){if(!$('sh').classList.contains('on')&&document.activeElement.tagName!='INPUT')load()},30000);
 </script></body></html>
 """
